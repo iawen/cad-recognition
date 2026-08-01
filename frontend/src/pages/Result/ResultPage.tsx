@@ -1,0 +1,131 @@
+import { useEffect, useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
+import { Spin, message } from 'antd';
+import { getTaskStatus, getSymbols, getTables, getTexts } from '../../api/recognition';
+import {
+  RecognitionTask,
+  ElectricalSymbol,
+  ExtractedTable,
+  ExtractedText,
+} from '../../types/recognition';
+import { useCanvasStore } from '../../store/canvasStore';
+import ResultHeader from './ResultHeader';
+import LeftPanel from './LeftPanel';
+import CanvasViewer from './CanvasViewer/CanvasViewer';
+
+export default function ResultPage() {
+  const { taskId } = useParams<{ taskId: string }>();
+  const [loading, setLoading] = useState(true);
+  const [task, setTask] = useState<RecognitionTask | null>(null);
+  const [symbols, setSymbols] = useState<ElectricalSymbol[]>([]);
+  const [tables, setTables] = useState<ExtractedTable[]>([]);
+  const [texts, setTexts] = useState<ExtractedText[]>([]);
+  const { selectedSheetIndex } = useCanvasStore();
+
+  useEffect(() => {
+    if (!taskId) return;
+
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const [taskRes, symbolsRes, tablesRes, textsRes] = await Promise.all([
+          getTaskStatus(taskId),
+          getSymbols(taskId),
+          getTables(taskId),
+          getTexts(taskId),
+        ]);
+        setTask(taskRes.data);
+        setSymbols(symbolsRes.data);
+        setTables(tablesRes.data);
+        setTexts(textsRes.data);
+      } catch {
+        message.error('加载识别结果失败');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [taskId]);
+
+  // 根据选中的图纸页筛选数据
+  const sheetLabel = `页${selectedSheetIndex + 1}`;
+  const filteredSymbols = useMemo(
+    () => symbols.filter((s) => s.position.sheet === sheetLabel),
+    [symbols, sheetLabel]
+  );
+  const filteredTables = useMemo(
+    () => tables.filter((t) => t.position.sheet === sheetLabel),
+    [tables, sheetLabel]
+  );
+  const filteredTexts = useMemo(
+    () => texts.filter((t) => t.position.sheet === sheetLabel),
+    [texts, sheetLabel]
+  );
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+        }}
+      >
+        <Spin size="large" tip="加载识别结果中..." />
+      </div>
+    );
+  }
+
+  if (!task) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+        }}
+      >
+        任务不存在
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: 'calc(100vh - 64px)',
+        background: '#f0f2f5',
+      }}
+    >
+      {/* 顶部信息栏 */}
+      <ResultHeader task={task} />
+
+      {/* 主体：左右分栏 */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* 左侧面板 */}
+        <div style={{ width: '35%', minWidth: 360, maxWidth: 480, overflow: 'hidden' }}>
+          <LeftPanel
+            symbols={filteredSymbols}
+            tables={filteredTables}
+            texts={filteredTexts}
+          />
+        </div>
+
+        {/* 右侧画布 */}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <CanvasViewer
+            symbols={filteredSymbols}
+            tables={filteredTables}
+            texts={filteredTexts}
+            sheetIndex={selectedSheetIndex}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}

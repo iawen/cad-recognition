@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900">
+  <rect width="1200" height="900" fill="#1a1a2e"/>
+
+  <!-- 网格线 -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#2a2a4a" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="900" fill="url(#grid)"/>
+
+  <!-- 10kV 母线 -->
+  <line x1="80" y1="70" x2="1120" y2="70" stroke="#00bcd4" stroke-width="3"/>
+  <line x1="80" y1="430" x2="1120" y2="430" stroke="#00bcd4" stroke-width="3"/>
+  <line x1="80" y1="430" x2="80" y2="470" stroke="#00bcd4" stroke-width="3"/>
+  <line x1="1120" y1="430" x2="1120" y2="470" stroke="#00bcd4" stroke-width="3"/>
+
+  <!-- 0.4kV 母线 -->
+  <line x1="80" y1="480" x2="1120" y2="480" stroke="#ff9800" stroke-width="3"/>
+
+  <!-- 标题 -->
+  <text x="600" y="30" text-anchor="middle" fill="#ffffff" font-size="20" font-weight="bold" font-family="sans-serif">10kV 高压配电系统图</text>
+
+  <!-- 进线柜区域 -->
+  <rect x="100" y="80" width="180" height="280" fill="none" stroke="#444" stroke-width="1" stroke-dasharray="4,4"/>
+  <text x="190" y="100" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">进线柜 KYN28A</text>
+
+  <!-- 进线断路器 -->
+  <circle cx="190" cy="140" r="15" fill="none" stroke="#4caf50" stroke-width="2"/>
+  <line x1="190" y1="70" x2="190" y2="125" stroke="#4caf50" stroke-width="2"/>
+  <line x1="190" y1="155" x2="190" y2="180" stroke="#4caf50" stroke-width="2"/>
+  <line x1="175" y1="140" x2="205" y2="140" stroke="#4caf50" stroke-width="2"/>
+  <rect x="175" y="180" width="30" height="40" rx="2" fill="none" stroke="#4caf50" stroke-width="2"/>
+  <text x="190" y="230" text-anchor="middle" fill="#E74C3C" font-size="10" font-family="sans-serif">QF1 NSX250N</text>
+
+  <!-- 变压器回路 -->
+  <rect x="320" y="80" width="200" height="280" fill="none" stroke="#444" stroke-width="1" stroke-dasharray="4,4"/>
+  <text x="420" y="100" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">变压器回路</text>
+
+  <line x1="420" y1="430" x2="420" y2="125" stroke="#3498DB" stroke-width="2"/>
+  <circle cx="420" cy="160" r="15" fill="none" stroke="#3498DB" stroke-width="2"/>
+  <line x1="405" y1="160" x2="435" y2="160" stroke="#3498DB" stroke-width="2"/>
+
+  <!-- 变压器符号 -->
+  <circle cx="420" cy="200" r="20" fill="none" stroke="#3498DB" stroke-width="2.5"/>
+  <circle cx="420" cy="240" r="20" fill="none" stroke="#3498DB" stroke-width="2.5"/>
+  <line x1="420" y1="180" x2="420" y2="220" stroke="#3498DB" stroke-width="2"/>
+  <line x1="420" y1="260" x2="420" y2="300" stroke="#3498DB" stroke-width="2"/>
+  <rect x="405" y="300" width="30" height="40" rx="2" fill="none" stroke="#3498DB" stroke-width="2"/>
+  <line x1="420" y1="340" x2="420" y2="430" stroke="#3498DB" stroke-width="2"/>
+  <line x1="420" y1="430" x2="420" y2="480" stroke="#3498DB" stroke-width="2"/>
+
+  <text x="420" y="270" text-anchor="middle" fill="#3498DB" font-size="11" font-family="sans-serif">TM1 800kVA</text>
+
+  <!-- 低压进线柜 -->
+  <rect x="560" y="480" width="140" height="200" fill="none" stroke="#444" stroke-width="1" stroke-dasharray="4,4"/>
+  <text x="630" y="500" text-anchor="middle" fill="#888" font-size="10" font-family="sans-serif">低压进线柜 AA1</text>
+
+  <!-- 母线联络 -->
+  <rect x="85" y="480" width="60" height="40" fill="none" stroke="#ff9800" stroke-width="2"/>
+  <text x="115" y="504" text-anchor="middle" fill="#ff9800" font-size="10" font-family="sans-serif">QSA</text>
+
+  <!-- 接触器 -->
+  <circle cx="210" cy="240" r="12" fill="none" stroke="#2ECC71" stroke-width="2"/>
+  <line x1="200" y1="240" x2="220" y2="240" stroke="#2ECC71" stroke-width="2"/>
+  <text x="210" y="265" text-anchor="middle" fill="#2ECC71" font-size="10" font-family="sans-serif">KM1 LC1D50</text>
+
+  <!-- 继电器 -->
+  <rect x="845" y="205" width="50" height="30" fill="none" stroke="#E67E22" stroke-width="2"/>
+  <text x="870" y="225" text-anchor="middle" fill="#E67E22" font-size="10" font-family="sans-serif">KA1-KA8</text>
+
+  <!-- 电压表 -->
+  <circle cx="600" cy="140" r="14" fill="none" stroke="#F1C40F" stroke-width="2"/>
+  <text x="600" y="143" text-anchor="middle" fill="#F1C40F" font-size="8" font-family="sans-serif">V</text>
+  <text x="600" y="168" text-anchor="middle" fill="#F1C40F" font-size="10" font-family="sans-serif">V1 0-450V</text>
+
+  <!-- 电流互感器 -->
+  <circle cx="930" cy="210" r="10" fill="none" stroke="#E91E63" stroke-width="2"/>
+  <line x1="930" y1="195" x2="930" y2="200" stroke="#E91E63" stroke-width="2"/>
+  <line x1="930" y1="220" x2="930" y2="225" stroke="#E91E63" stroke-width="2"/>
+  <text x="930" y="240" text-anchor="middle" fill="#E91E63" font-size="10" font-family="sans-serif">CT1 300/5A</text>
+
+  <!-- 熔断器 -->
+  <rect x="460" y="120" width="8" height="40" fill="none" stroke="#9B59B6" stroke-width="2"/>
+  <line x1="448" y1="120" x2="480" y2="120" stroke="#9B59B6" stroke-width="1.5"/>
+  <text x="464" y="175" text-anchor="middle" fill="#9B59B6" font-size="10" font-family="sans-serif">FU1 RT18-32</text>
+
+  <!-- 电缆线路 -->
+  <path d="M 1050 100 L 900 100 L 700 200 L 500 200" fill="none" stroke="#1ABC9C" stroke-width="2" stroke-dasharray="none"/>
+  <text x="800" y="90" text-anchor="middle" fill="#1ABC9C" font-size="10" font-family="sans-serif">电缆 YJV-4x185+1x95</text>
+
+  <!-- 隔离开关 -->
+  <line x1="110" y1="410" x2="140" y2="380" stroke="#3F51B5" stroke-width="2.5"/>
+  <line x1="130" y1="410" x2="110" y2="380" stroke="#3F51B5" stroke-width="2.5"/>
+  <text x="130" y="365" text-anchor="middle" fill="#3F51B5" font-size="10" font-family="sans-serif">QS1 GN19-12/630</text>
+
+  <!-- UPS 电源 -->
+  <rect x="450" y="370" width="60" height="45" fill="none" stroke="#795548" stroke-width="2"/>
+  <text x="480" y="395" text-anchor="middle" fill="#795548" font-size="10" font-family="sans-serif">UPS-30kVA</text>
+
+  <!-- 避雷器 -->
+  <path d="M 580 390 L 600 370 L 620 390" fill="none" stroke="#E74C3C" stroke-width="2"/>
+  <line x1="600" y1="370" x2="600" y2="365" stroke="#E74C3C" stroke-width="2"/>
+  <text x="600" y="408" text-anchor="middle" fill="#E74C3C" font-size="10" font-family="sans-serif">F1 YH5WZ-17/45</text>
+
+  <!-- 电容器 -->
+  <line x1="700" y1="380" x2="720" y2="380" stroke="#3498DB" stroke-width="3"/>
+  <line x1="710" y1="375" x2="710" y2="385" stroke="#3498DB" stroke-width="3"/>
+  <text x="710" y="400" text-anchor="middle" fill="#3498DB" font-size="10" font-family="sans-serif">C1 30kvar</text>
+
+  <!-- 设备清单表格框 -->
+  <rect x="40" y="720" width="680" height="160" fill="rgba(24,144,255,0.08)" stroke="#1890FF" stroke-width="1.5" stroke-dasharray="8,4" rx="4"/>
+  <text x="380" y="740" text-anchor="middle" fill="#1890FF" font-size="12" font-family="sans-serif">设备清单表</text>
+
+  <!-- 表格内容 -->
+  <text x="60" y="770" fill="#aaa" font-size="10" font-family="monospace">序号 | 设备名称 | 型号规格 | 数量</text>
+  <text x="60" y="790" fill="#888" font-size="10" font-family="monospace">1    | 干式变压器 | SCB10-800/10 | 2</text>
+  <text x="60" y="808" fill="#888" font-size="10" font-family="monospace">2    | 高压开关柜 | KYN28A-12 | 4</text>
+  <text x="60" y="826" fill="#888" font-size="10" font-family="monospace">3    | 低压开关柜 | MNS | 6</text>
+  <text x="60" y="844" fill="#888" font-size="10" font-family="monospace">4    | 电容补偿柜 | GGJ-300kvar | 1</text>
+  <text x="60" y="862" fill="#888" font-size="10" font-family="monospace">5    | 直流屏 | GZDW-100Ah | 1</text>
+
+  <!-- 文字标注 -->
+  <text x="420" y="50" text-anchor="middle" fill="#52C41A" font-size="9" font-family="sans-serif">TM1 800kVA</text>
+  <text x="420" y="60" text-anchor="middle" fill="#52C41A" font-size="8" font-family="sans-serif">10/0.4kV Dyn11</text>
+
+  <text x="60" y="680" fill="#fff" font-size="10" font-family="sans-serif">控制室</text>
+  <rect x="55" y="685" width="50" height="20" fill="none" stroke="#fff" stroke-width="1"/>
+
+  <text x="1050" y="680" fill="#fff" font-size="10" font-family="sans-serif">配电间</text>
+  <rect x="1045" y="685" width="50" height="20" fill="none" stroke="#fff" stroke-width="1"/>
+
+  <!-- 说明文字区域 -->
+  <text x="60" y="930" fill="#aaa" font-size="10" font-family="sans-serif">说明：本系统图按照 GB 50052-2009《供配电系统设计规范》进行设计</text>
+  <text x="60" y="950" fill="#aaa" font-size="9" font-family="sans-serif">所有电气设备安装须符合 GB 50171-2012 规范要求</text>
+</svg>
