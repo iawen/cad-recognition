@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from drawing_recognition.domain.models import CadPoint
+from domain.models import CadPoint
 
 
 class CoordinateTransform:

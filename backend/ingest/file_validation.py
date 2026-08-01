@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from drawing_recognition.domain.errors import DrawingAnalysisError
+from domain.errors import DrawingAnalysisError
 
 
 SUPPORTED_EXTENSIONS = {".dwg", ".dxf"}

@@ -1,0 +1,16 @@
+[project]
+name = "drawing-recognition"
+version = "0.1.0"
+description = "Vector-first electrical DWG/DXF recognition feasibility service"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ezdxf>=1.4.0",
+    "fastapi>=0.110.0",
+    "httpx>=0.27.0",
+    "matplotlib>=3.8.0",
+    "pillow>=10.0.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.29.0",
+]

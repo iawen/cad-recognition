@@ -1,4 +1,4 @@
-"""P2 optional rendered-drawing OBB detection pipeline.
+"""Optional rendered-drawing VLM/OBB detection pipeline.
 
 This pipeline runs only when ``DRAWING_OBB_MODEL`` points to a validated model.
 It deliberately remains separate from the deterministic Block path so deployments
@@ -10,11 +10,12 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from drawing_recognition.cad.coordinates import CoordinateTransform
-from drawing_recognition.domain.models import CadPoint, ComponentCandidate, ComponentEvidence
-from drawing_recognition.recognition.obb_detector import ObbDetector
-from drawing_recognition.rendering.dxf_renderer import render_dxf_to_png
-from drawing_recognition.rendering.tiling import create_tiles
+from cad.coordinates import CoordinateTransform
+from domain.models import CadPoint, ComponentCandidate, ComponentEvidence
+from recognition.obb_detector import ObbDetector
+from recognition.vlm_detector import VlmDetector
+from rendering.dxf_renderer import render_dxf_to_png
+from rendering.tiling import create_tiles
 
 
 def _drawing_transform(dxf_path: Path, width_px: int, height_px: int) -> CoordinateTransform:
@@ -38,9 +39,11 @@ def _is_duplicate(candidate: ComponentCandidate, prior: list[ComponentCandidate]
     )
 
 
-def detect_visual_components(dxf_path: Path, *, detector: ObbDetector | None = None) -> list[ComponentCandidate]:
+def detect_visual_components(dxf_path: Path, *, detector: ObbDetector | VlmDetector | None = None) -> list[ComponentCandidate]:
     """Render, tile, infer, map detections to CAD coordinates, and de-duplicate."""
-    detector = detector or ObbDetector()
+    detector = detector or VlmDetector()
+    if isinstance(detector, VlmDetector) and not detector.enabled:
+        detector = ObbDetector()
     if not detector.enabled:
         return []
     try:
@@ -60,7 +63,7 @@ def detect_visual_components(dxf_path: Path, *, detector: ObbDetector | None = N
                     id=f"vision_{len(candidates) + 1:04d}", type=detection.label,
                     cad_center=transform.pixel_to_cad(global_center), rotation_deg=detection.angle_deg,
                     source="vision", confidence=detection.confidence, review_status="pending",
-                    evidence=ComponentEvidence(block_name="", layer="", detection_model=str(detector.model_path)),
+                    evidence=ComponentEvidence(block_name="", layer="", detection_model=detector.model_identifier),
                 )
                 if not _is_duplicate(candidate, candidates):
                     candidates.append(candidate)

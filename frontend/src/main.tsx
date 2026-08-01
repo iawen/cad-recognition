@@ -2,10 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 
-// 启动 MSW mock 服务（同事接入真实后端时，注释掉下面这两行即可）
+// 仅在显式开启 VITE_USE_MOCKS=true 时启动 MSW；默认联调真实后端。
 async function bootstrap() {
-  // 开发环境下启动 MSW
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && import.meta.env.VITE_USE_MOCKS === 'true') {
     const { worker } = await import('./mock/browser');
     await worker.start({
       onUnhandledRequest: 'bypass',

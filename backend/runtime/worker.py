@@ -5,8 +5,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from drawing_recognition.runtime.repository import update_run
-from drawing_recognition.service import analyze_drawing
+from runtime.repository import update_run
+from service import analyze_drawing
 
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="drawing-recognition")

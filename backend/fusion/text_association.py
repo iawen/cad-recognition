@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 
-from drawing_recognition.domain.models import ComponentCandidate, NativeText
+from domain.models import ComponentCandidate, NativeText
 
 
 REFERENCE_PREFIXES = {

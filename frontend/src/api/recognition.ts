@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { ApiResponse, PaginatedData } from '../types/api';
+import { ApiResponse } from '../types/api';
 import { RecognitionTask, ElectricalSymbol, ExtractedTable, ExtractedText } from '../types/recognition';
 
 /** 查询任务状态 */

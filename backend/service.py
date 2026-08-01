@@ -5,13 +5,13 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from drawing_recognition.cad.dxf_parser import parse_dxf
-from drawing_recognition.domain.models import DrawingAnalysisResult
-from drawing_recognition.fusion.result_assembler import assemble_vector_result
-from drawing_recognition.fusion.text_association import associate_native_text
-from drawing_recognition.ingest.dwg_converter import convert_dwg_to_dxf
-from drawing_recognition.ingest.file_validation import validate_drawing_file
-from drawing_recognition.recognition.vision_pipeline import detect_visual_components
+from cad.dxf_parser import parse_dxf
+from domain.models import DrawingAnalysisResult
+from fusion.result_assembler import assemble_vector_result
+from fusion.text_association import associate_native_text
+from ingest.dwg_converter import convert_dwg_to_dxf
+from ingest.file_validation import validate_drawing_file
+from recognition.vision_pipeline import detect_visual_components
 
 
 def analyze_drawing(path: Path, *, max_components: int = 1000) -> DrawingAnalysisResult:

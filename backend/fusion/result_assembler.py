@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from drawing_recognition.domain.models import DrawingAnalysisResult, ParsedDxfDrawing
-from drawing_recognition.ingest.file_validation import sha256_file
+from domain.models import DrawingAnalysisResult, ParsedDxfDrawing
+from ingest.file_validation import sha256_file
 
 
 def assemble_vector_result(
@@ -38,8 +38,8 @@ def assemble_vector_result(
             "unknown_blocks": parsed.unknown_blocks,
             "limitations": [
                 "当前版本仅实现 DXF 矢量审计和已知 Block 识别。",
-                "未识别的打散符号将留待后续 OBB 视觉检测模块处理。",
-                "当前版本未执行 OCR、文字-元件关联、连线追踪或 Netlist 生成。",
+                "未识别的打散符号可由已启用的 VLM 分块识别或已配置的 OBB 基线补充；两者均需实测验证。",
+                "当前版本已执行原生 DXF 文字关联，但未执行图像 OCR、连线追踪或 Netlist 生成。",
             ],
         },
     )

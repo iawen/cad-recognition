@@ -99,10 +99,6 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
     }
   };
 
-  // 是否有多实例（用于决定子项名称是否带序号）
-  const hasMultipleInstances = (sym: ElectricalSymbol) =>
-    sym.instances && sym.instances.length > 1;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 8 }}>
       {/* 搜索框 */}

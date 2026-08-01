@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from drawing_recognition.domain.errors import DrawingAnalysisError
+from domain.errors import DrawingAnalysisError
 
 
 def render_dxf_to_png(dxf_path: Path, output_path: Path, *, dpi: int = 300) -> Path:

@@ -11,9 +11,9 @@ try:
 except ImportError:  # pragma: no cover
     ezdxf = None
 
-from drawing_recognition.domain.errors import DrawingAnalysisError
-from drawing_recognition.domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText, ParsedDxfDrawing
-from drawing_recognition.recognition.block_classifier import classify_block
+from domain.errors import DrawingAnalysisError
+from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText, ParsedDxfDrawing
+from recognition.block_classifier import classify_block
 
 
 def _point(value: Any) -> CadPoint:

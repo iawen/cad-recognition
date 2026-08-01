@@ -10,20 +10,107 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
-from drawing_recognition.domain.errors import DrawingAnalysisError
-from drawing_recognition.domain.models import CadPoint
-from drawing_recognition.evaluation.audit import audit_drawings
-from drawing_recognition.evaluation.coordinate_validation import validate_coordinate_round_trip
-from drawing_recognition.ingest.file_validation import SUPPORTED_EXTENSIONS
-from drawing_recognition.runtime.repository import UPLOAD_ROOT, create_run, get_run, list_events
-from drawing_recognition.runtime.worker import submit_analysis
-from drawing_recognition.service import analyze_drawing
+from domain.errors import DrawingAnalysisError
+from domain.models import CadPoint
+from evaluation.audit import audit_drawings
+from evaluation.coordinate_validation import validate_coordinate_round_trip
+from ingest.file_validation import SUPPORTED_EXTENSIONS
+from runtime.repository import UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
+from runtime.worker import submit_analysis
+from service import analyze_drawing
 
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-SAMPLE_DRAWING = Path(__file__).resolve().parent / "data" / "B电气图.dwg"
+SAMPLE_DRAWING = Path(__file__).resolve().parent.parent / "data" / "B电气图.dwg"
+
+_COMPONENT_COLORS = {
+    "resistor": "#E74C3C",
+    "switch": "#3498DB",
+    "fuse": "#F1C40F",
+    "relay": "#9B59B6",
+    "connector": "#1ABC9C",
+    "capacitor": "#2ECC71",
+    "diode": "#E67E22",
+}
+
+
+class FeasibilityLogin(BaseModel):
+    username: str
+    password: str
+
+
+def _response(data: object, message: str = "ok") -> dict[str, object]:
+    """Use the response envelope consumed by the confirmed frontend."""
+    return {"code": 0, "message": message, "data": data}
+
+
+def _frontend_status(status: str) -> str:
+    return {"queued": "pending", "running": "processing", "succeeded": "completed", "failed": "failed"}.get(status, "pending")
+
+
+def _frontend_task(run: dict) -> dict[str, object]:
+    completed_at = run["updated_at"] if run["status"] in {"succeeded", "failed"} else None
+    size = get_run_path(run["id"])
+    return {
+        "taskId": run["id"],
+        "fileName": run["filename"],
+        "fileSize": size.stat().st_size if size and size.is_file() else 0,
+        "status": _frontend_status(run["status"]),
+        "progress": run["progress"],
+        "createdAt": run["created_at"],
+        "completedAt": completed_at,
+        # The current canvas renders its CAD diagram layer; these dimensions define
+        # the normalized annotation coordinate space returned by the endpoints below.
+        "imageUrl": "",
+        "imageWidth": 1200,
+        "imageHeight": 900,
+        "sheets": [{"index": 0, "name": "模型空间"}],
+    }
+
+
+def _normalized_boxes(result: dict) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Project CAD centers into stable normalized UI boxes for the P1 result."""
+    points = [component["cad_center"] for component in result.get("components", [])]
+    points.extend(text["cad_position"] for text in result.get("texts", []) if text.get("cad_position"))
+    if not points:
+        return {}, {}
+    min_x, max_x = min(point["x"] for point in points), max(point["x"] for point in points)
+    min_y, max_y = min(point["y"] for point in points), max(point["y"] for point in points)
+    span_x, span_y = max(max_x - min_x, 1.0), max(max_y - min_y, 1.0)
+
+    def box(point: dict[str, float], width: float, height: float) -> dict[str, float]:
+        x = min(max((point["x"] - min_x) / span_x - width / 2, 0.0), 1.0 - width)
+        # DXF Y grows upward whereas the canvas Y grows downward.
+        y = min(max((max_y - point["y"]) / span_y - height / 2, 0.0), 1.0 - height)
+        return {"x": round(x, 6), "y": round(y, 6), "width": width, "height": height}
+
+    component_boxes = {component["id"]: box(component["cad_center"], 0.035, 0.035) for component in result.get("components", [])}
+    text_boxes = {
+        text["id"]: box(text["cad_position"], min(0.35, max(0.06, len(text["content"]) * 0.006)), 0.024)
+        for text in result.get("texts", []) if text.get("cad_position")
+    }
+    return component_boxes, text_boxes
+
+
+def _completed_result(run_id: str) -> dict:
+    run = get_run(run_id)
+    if run is None:
+        raise HTTPException(404, "识别任务不存在。")
+    if run["status"] != "succeeded" or run["result"] is None:
+        raise HTTPException(409, "识别任务尚未完成。")
+    return run["result"]
+
+
+@router.post("/api/auth/login")
+async def login_for_feasibility(payload: FeasibilityLogin):
+    """Provide a local UI gate only; this feasibility service has no user system."""
+    username = payload.username.strip()
+    if not username or not payload.password:
+        raise HTTPException(400, "用户名和密码不能为空。")
+    return _response({"token": "local-feasibility-token", "user": {"username": username}})
 
 
 def _raise_analysis_error(exc: DrawingAnalysisError) -> None:
@@ -38,7 +125,7 @@ async def get_drawing_recognition_capabilities():
     return {
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
         "implemented": ["p0_batch_audit", "dxf_audit", "block_component_recognition", "native_text_extraction", "text_component_linking", "persistent_runs", "sse_progress"],
-        "optional": ["png_rendering", "overlapping_tiling", "obb_detection_when_model_configured"],
+        "optional": ["png_rendering", "overlapping_tiling", "vlm_detection_when_enabled", "obb_detection_when_model_configured"],
         "not_implemented": ["paddleocr", "wire_tracing", "netlist", "human_review_workspace"],
         "sample_available": SAMPLE_DRAWING.is_file(),
     }
@@ -72,6 +159,66 @@ async def analyze_uploaded_drawing(file: UploadFile = File(...)):
         result["drawing"]["filename"] = original_name
         result["drawing"]["size_bytes"] = size
         return result
+
+
+@router.post("/api/upload")
+async def upload_for_frontend(file: UploadFile = File(...)):
+    """Create the asynchronous task consumed by the confirmed upload page."""
+    response = await create_recognition_run(file)
+    return _response({"taskId": response["run_id"]})
+
+
+@router.get("/api/recognition/{task_id}")
+async def get_frontend_task(task_id: str):
+    run = get_run(task_id)
+    if run is None:
+        raise HTTPException(404, "识别任务不存在。")
+    return _response(_frontend_task(run))
+
+
+@router.get("/api/recognition/{task_id}/symbols")
+async def get_frontend_symbols(task_id: str):
+    result = _completed_result(task_id)
+    component_boxes, _ = _normalized_boxes(result)
+    symbols = []
+    for component in result.get("components", []):
+        attributes = [{"key": key, "value": value} for key, value in component["evidence"].get("attributes", {}).items()]
+        if component.get("value"):
+            attributes.append({"key": "参数", "value": component["value"]})
+        name = component.get("reference") or component["type"]
+        symbols.append({
+            "id": component["id"], "name": name, "model": component.get("value"),
+            "category": component["type"], "quantity": 1, "attributes": attributes,
+            "position": {"x": component["cad_center"]["x"], "y": component["cad_center"]["y"], "sheet": "页1"},
+            "confidence": component["confidence"], "boundingBox": component_boxes.get(component["id"], {"x": 0, "y": 0, "width": 0.035, "height": 0.035}),
+            "color": _COMPONENT_COLORS.get(component["type"], "#8C8C8C"),
+        })
+    return _response(symbols)
+
+
+@router.get("/api/recognition/{task_id}/tables")
+async def get_frontend_tables(task_id: str):
+    _completed_result(task_id)
+    # BOM/table extraction is intentionally outside this feasibility-validation scope.
+    return _response([])
+
+
+@router.get("/api/recognition/{task_id}/texts")
+async def get_frontend_texts(task_id: str):
+    result = _completed_result(task_id)
+    _, text_boxes = _normalized_boxes(result)
+    texts = []
+    for text in result.get("texts", []):
+        if text.get("cad_position") is None:
+            continue
+        content = text["content"]
+        text_type = "title" if len(content) < 80 and ("图" in content or "TITLE" in text["layer"].upper()) else "label"
+        texts.append({
+            "id": text["id"], "content": content, "type": text_type, "layer": text["layer"], "confidence": 1.0,
+            "position": {"x": text["cad_position"]["x"], "y": text["cad_position"]["y"], "sheet": "页1"},
+            "boundingBox": text_boxes.get(text["id"], {"x": 0, "y": 0, "width": 0.06, "height": 0.024}),
+        })
+    return _response(texts)
 
 
 @router.post("/api/drawing-recognition/runs")

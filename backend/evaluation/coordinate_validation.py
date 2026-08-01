@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from drawing_recognition.cad.coordinates import CoordinateTransform
-from drawing_recognition.domain.models import CadPoint
+from cad.coordinates import CoordinateTransform
+from domain.models import CadPoint
 
 
 def validate_coordinate_round_trip(

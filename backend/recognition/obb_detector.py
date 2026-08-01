@@ -32,6 +32,10 @@ class ObbDetector:
     def enabled(self) -> bool:
         return bool(self.model_path and Path(self.model_path).is_file())
 
+    @property
+    def model_identifier(self) -> str:
+        return str(self.model_path) if self.model_path else "unconfigured-obb"
+
     def detect(self, image_path: Path) -> list[ObbDetection]:
         if not self.enabled:
             return []

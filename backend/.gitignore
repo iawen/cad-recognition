@@ -2,5 +2,6 @@
 data/runtime/
 data/models/
 data/renders/
+.env
 __pycache__/
 *.py[cod]

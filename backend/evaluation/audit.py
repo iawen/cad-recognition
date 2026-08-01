@@ -6,8 +6,8 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from drawing_recognition.domain.models import AuditReport
-from drawing_recognition.service import analyze_drawing
+from domain.models import AuditReport
+from service import analyze_drawing
 
 
 def audit_drawings(paths: list[Path]) -> AuditReport:

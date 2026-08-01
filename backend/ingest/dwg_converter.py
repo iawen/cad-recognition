@@ -6,10 +6,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from drawing_recognition.domain.errors import DrawingAnalysisError
+from dotenv import load_dotenv
+
+from domain.errors import DrawingAnalysisError
 
 
 def _find_converter() -> str | None:
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     configured = os.getenv("ODA_FILE_CONVERTER") or os.getenv("DWG_CONVERTER")
     if configured and Path(configured).is_file():
         return configured

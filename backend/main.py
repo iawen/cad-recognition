@@ -1,14 +1,14 @@
 """Standalone application entry point for electrical drawing recognition.
 
-Run from the ``src`` directory with:
-``python -m drawing_recognition.main``
+Run from the ``backend`` directory with:
+``uv run python -m main``
 """
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from drawing_recognition.api import router
+from api import router
 
 
 app = FastAPI(
@@ -35,4 +35,4 @@ app.include_router(router, tags=["Drawing Recognition"])
 
 
 if __name__ == "__main__":
-    uvicorn.run("drawing_recognition.main:app", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
