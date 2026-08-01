@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Stage, Layer } from 'react-konva';
+import { Image as KonvaImage, Stage, Layer } from 'react-konva';
 import { KonvaEventObject } from 'konva/lib/Node';
 import { ElectricalSymbol, ExtractedTable, ExtractedText } from '../../../types/recognition';
 import CadDiagramLayer from './CadDiagramLayer';
@@ -10,6 +10,7 @@ interface CanvasViewerProps {
   tables: ExtractedTable[];
   texts: ExtractedText[];
   sheetIndex: number;
+  imageUrl: string;
 }
 
 const STAGE_WIDTH = 1200;
@@ -17,17 +18,33 @@ const STAGE_HEIGHT = 900;
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3;
 
-export default function CanvasViewer({ symbols, tables, texts, sheetIndex }: CanvasViewerProps) {
+export default function CanvasViewer({ symbols, tables, texts, sheetIndex, imageUrl }: CanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [drawingImage, setDrawingImage] = useState<HTMLImageElement | null>(null);
 
   // 切换图纸页时重置缩放和位置
   useEffect(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
   }, [sheetIndex]);
+
+  useEffect(() => {
+    if (!imageUrl) {
+      setDrawingImage(null);
+      return;
+    }
+    const image = new window.Image();
+    image.onload = () => setDrawingImage(image);
+    image.onerror = () => setDrawingImage(null);
+    image.src = imageUrl;
+    return () => {
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [imageUrl]);
 
   // 响应式调整画布大小
   useEffect(() => {
@@ -110,9 +127,13 @@ export default function CanvasViewer({ symbols, tables, texts, sheetIndex }: Can
           setPosition({ x: e.target.x(), y: e.target.y() });
         }}
       >
-        {/* 底图层：模拟 CAD 图纸 */}
+        {/* 优先展示当前上传图纸的渲染结果；没有底图时才使用示意图。 */}
         <Layer key={`diagram-${sheetIndex}`}>
-          <CadDiagramLayer sheetIndex={sheetIndex} symbols={symbols} />
+          {drawingImage ? (
+            <KonvaImage image={drawingImage} x={0} y={0} width={STAGE_WIDTH} height={STAGE_HEIGHT} />
+          ) : (
+            <CadDiagramLayer sheetIndex={sheetIndex} symbols={symbols} />
+          )}
         </Layer>
 
         {/* 标注层：交互式边界框 */}

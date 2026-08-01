@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from domain.errors import DrawingAnalysisError
@@ -18,7 +18,7 @@ from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from ingest.file_validation import SUPPORTED_EXTENSIONS
 from recognition.component_catalog import CATALOG_SOURCE, catalog_capabilities
-from runtime.repository import UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
+from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
 from runtime.worker import submit_analysis
 from service import analyze_drawing
 from tools.logger import logger
@@ -26,7 +26,9 @@ from tools.logger import logger
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-SAMPLE_DRAWING = Path(__file__).resolve().parent.parent / "data" / "B电气图.dwg"
+# The checked-in DXF was manually converted from the companion DWG. Keeping the
+# sample on the DXF path lets P0/P1 validation run without local ODA installation.
+SAMPLE_DRAWING = Path(__file__).resolve().parent.parent / "data" / "B电气图.dxf"
 
 _COMPONENT_COLORS = {
     "circuit_breaker": "#E74C3C", "current_transformer": "#3498DB",
@@ -53,9 +55,31 @@ def _frontend_status(status: str) -> str:
     return {"queued": "pending", "running": "processing", "succeeded": "completed", "failed": "failed"}.get(status, "pending")
 
 
+def _ensure_run_render(run: dict) -> Path | None:
+    """Render a historical completed task on first result-page request if needed."""
+    render_path = RENDER_ROOT / f"{run['id']}.png"
+    if render_path.is_file():
+        return render_path
+    if run["status"] != "succeeded":
+        return None
+    source_path = get_run_path(run["id"])
+    if source_path is None or not source_path.is_file():
+        logger.warning("Cannot render completed task: upload missing run_id=%s", run["id"])
+        return None
+    try:
+        logger.info("Rendering historical task background run_id=%s source=%s", run["id"], source_path)
+        RENDER_ROOT.mkdir(parents=True, exist_ok=True)
+        analyze_drawing(source_path, render_output_path=render_path)
+    except Exception:
+        logger.exception("Historical task background rendering failed run_id=%s", run["id"])
+        return None
+    return render_path if render_path.is_file() else None
+
+
 def _frontend_task(run: dict) -> dict[str, object]:
     completed_at = run["updated_at"] if run["status"] in {"succeeded", "failed"} else None
     size = get_run_path(run["id"])
+    render_path = _ensure_run_render(run)
     return {
         "taskId": run["id"],
         "fileName": run["filename"],
@@ -65,9 +89,7 @@ def _frontend_task(run: dict) -> dict[str, object]:
         "createdAt": run["created_at"],
         "completedAt": completed_at,
         "error": run.get("error") if run["status"] == "failed" else None,
-        # The current canvas renders its CAD diagram layer; these dimensions define
-        # the normalized annotation coordinate space returned by the endpoints below.
-        "imageUrl": "",
+        "imageUrl": f"/api/recognition/{run['id']}/drawing" if render_path else "",
         "imageWidth": 1200,
         "imageHeight": 900,
         "sheets": [{"index": 0, "name": "模型空间"}],
@@ -190,6 +212,21 @@ async def get_frontend_task(task_id: str):
         raise HTTPException(404, "识别任务不存在。")
     logger.info("Frontend task returned run_id=%s status=%s phase=%s", task_id, run["status"], run["phase"])
     return _response(_frontend_task(run))
+
+
+@router.get("/api/recognition/{task_id}/drawing")
+async def get_frontend_drawing(task_id: str):
+    """Serve the PNG rendered from the current uploaded drawing."""
+    run = get_run(task_id)
+    if run is None:
+        logger.warning("Frontend drawing not found: run not found run_id=%s", task_id)
+        raise HTTPException(404, "识别任务不存在。")
+    render_path = RENDER_ROOT / f"{task_id}.png"
+    if not render_path.is_file():
+        logger.warning("Frontend drawing unavailable run_id=%s status=%s", task_id, run["status"])
+        raise HTTPException(404, "当前任务尚未生成图纸底图。")
+    logger.info("Frontend drawing returned run_id=%s path=%s", task_id, render_path)
+    return FileResponse(render_path, media_type="image/png", filename=f"{task_id}.png")
 
 
 @router.get("/api/recognition/{task_id}/symbols")
@@ -324,7 +361,7 @@ async def validate_coordinates():
 
 @router.post("/api/drawing-recognition/analyze-sample")
 async def analyze_repository_sample():
-    """Analyze the checked-in B电气图.dwg sample for environment validation."""
+    """Analyze the checked-in manually converted B电气图.dxf sample."""
     try:
         return analyze_drawing(SAMPLE_DRAWING).model_dump()
     except DrawingAnalysisError as exc:

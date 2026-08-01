@@ -140,6 +140,7 @@ export default function ResultPage() {
             tables={filteredTables}
             texts={filteredTexts}
             sheetIndex={selectedSheetIndex}
+            imageUrl={task.imageUrl}
           />
         </div>
       </div>

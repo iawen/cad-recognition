@@ -11,7 +11,9 @@ uv run python -m main
 
 ## DWG 样本验证
 
-`data/B电气图.dwg` 必须先通过 ODA File Converter 转换为 DXF。将转换器绝对路径配置为本地 `.env` 中的 `ODA_FILE_CONVERTER`，然后调用 `/api/drawing-recognition/analyze-sample`，或通过前端上传图纸。
+`data/B电气图.dxf` 是由同目录 `B电气图.dwg` 手动转换得到的默认验证样本。调用 `/api/drawing-recognition/analyze-sample` 时直接使用该 DXF，不依赖本机 ODA File Converter。
+
+上传或分析原始 `data/B电气图.dwg` 时，仍需通过 ODA File Converter 转换为 DXF。将转换器绝对路径配置为本地 `.env` 中的 `ODA_FILE_CONVERTER`，然后再上传 DWG。
 
 首次配置时，在 `backend/` 下复制 `.env.example` 为 `.env`，然后填写实际安装路径：
 

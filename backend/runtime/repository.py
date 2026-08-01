@@ -15,6 +15,7 @@ from tools.logger import logger
 DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "runtime"
 DATABASE_PATH = DATA_ROOT / "recognition.db"
 UPLOAD_ROOT = DATA_ROOT / "uploads"
+RENDER_ROOT = DATA_ROOT / "renders"
 
 
 def _now() -> str:
