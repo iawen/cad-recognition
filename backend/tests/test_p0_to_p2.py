@@ -17,6 +17,7 @@ from evaluation.coordinate_validation import validate_coordinate_round_trip
 from rendering.dxf_renderer import render_dxf_to_png
 from rendering.tiling import create_tiles
 from recognition.vlm_detector import VlmDetector
+from recognition.component_catalog import COMPONENT_CATALOG
 from runtime.repository import create_run, update_run
 from service import analyze_drawing
 
@@ -25,10 +26,10 @@ class P0ToP2RegressionTests(unittest.TestCase):
     def _create_dxf(self, root: Path) -> Path:
         path = root / "electrical.dxf"
         document = ezdxf.new("R2018")
-        document.blocks.new("RESISTOR")
-        insert = document.modelspace().add_blockref("RESISTOR", (10, 20))
-        insert.add_attrib("TAG", "R1")
-        document.modelspace().add_text("R1 10k", dxfattribs={"insert": (12, 22)})
+        document.blocks.new("CIRCUIT_BREAKER")
+        insert = document.modelspace().add_blockref("CIRCUIT_BREAKER", (10, 20))
+        insert.add_attrib("TAG", "QF1")
+        document.modelspace().add_text("QF1", dxfattribs={"insert": (12, 22)})
         document.saveas(path)
         return path
 
@@ -47,8 +48,9 @@ class P0ToP2RegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             drawing = self._create_dxf(Path(temp_dir))
             result = analyze_drawing(drawing)
-            self.assertEqual(result.components[0].reference, "R1")
-            self.assertEqual(result.components[0].value, "10k")
+            self.assertEqual(result.components[0].type, "circuit_breaker")
+            self.assertEqual(result.components[0].reference, "QF1")
+            self.assertEqual(result.components[0].evidence.catalog_name, "断路器")
 
             app = FastAPI()
             app.include_router(router)
@@ -86,7 +88,8 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual(task.status_code, 200)
         self.assertEqual(task.json()["data"]["status"], "completed")
         self.assertEqual(symbols.status_code, 200)
-        self.assertEqual(symbols.json()["data"][0]["category"], "resistor")
+        self.assertEqual(symbols.json()["data"][0]["name"], "QF1")
+        self.assertEqual(symbols.json()["data"][0]["category"], "开关保护")
         self.assertGreaterEqual(symbols.json()["data"][0]["boundingBox"]["x"], 0)
         self.assertEqual(texts.status_code, 200)
         self.assertEqual(tables.json()["data"], [])
@@ -97,12 +100,12 @@ class P0ToP2RegressionTests(unittest.TestCase):
             from PIL import Image
             Image.new("RGB", (100, 80), "white").save(image_path)
             detections = VlmDetector._parse(
-                '{"components":[{"type":"resistor","bbox":[10,20,50,60],"confidence":0.9,"rotation_deg":90},'
+                '{"components":[{"type":"circuit_breaker","bbox":[10,20,50,60],"confidence":0.9,"rotation_deg":90},'
                 '{"type":"invalid","bbox":[0,0,1,1],"confidence":1}]}',
                 image_path,
             )
         self.assertEqual(len(detections), 1)
-        self.assertEqual(detections[0].label, "resistor")
+        self.assertEqual(detections[0].label, "circuit_breaker")
         self.assertEqual(detections[0].center_x, 30)
 
     def test_repository_sample_is_available_to_api(self):
@@ -110,6 +113,13 @@ class P0ToP2RegressionTests(unittest.TestCase):
         app.include_router(router)
         response = TestClient(app).get("/api/drawing-recognition/capabilities")
         self.assertTrue(response.json()["sample_available"])
+
+    def test_component_catalog_matches_supplied_component_list(self):
+        self.assertEqual(len(COMPONENT_CATALOG), 15)
+        self.assertEqual(
+            {item.display_name for item in COMPONENT_CATALOG},
+            {"断路器", "电流互感器", "电压互感器", "避雷器", "熔断器", "零序电流互感器", "带电显示器", "接地开关", "电流表", "电压表", "热继电器", "接触器", "电容器", "三相并联电容器组", "变压器"},
+        )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from tools.logger import logger
+
 
 DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "runtime"
 DATABASE_PATH = DATA_ROOT / "recognition.db"
@@ -45,6 +47,7 @@ def initialize_repository() -> None:
             )"""
         )
         connection.commit()
+        logger.info("Repository initialized database=%s", DATABASE_PATH)
     finally:
         connection.close()
 
@@ -67,6 +70,7 @@ def create_run(filename: str, file_path: Path) -> dict[str, Any]:
         )
         _append_event(connection, run_id, "queued", 0, record["message"])
         connection.commit()
+        logger.info("Run created run_id=%s filename=%s file_path=%s", run_id, filename, file_path)
     finally:
         connection.close()
     return record
@@ -89,6 +93,10 @@ def update_run(run_id: str, *, status: str, phase: str, progress: int, message: 
         )
         _append_event(connection, run_id, phase, progress, message)
         connection.commit()
+        logger.info(
+            "Run updated run_id=%s status=%s phase=%s progress=%s result_saved=%s error=%s",
+            run_id, status, phase, progress, result is not None, error or "",
+        )
     finally:
         connection.close()
 
@@ -100,10 +108,12 @@ def get_run(run_id: str) -> dict[str, Any] | None:
     finally:
         connection.close()
     if row is None:
+        logger.warning("Run not found run_id=%s", run_id)
         return None
     result = dict(row)
     result["result"] = json.loads(result.pop("result_json")) if result.get("result_json") else None
     result.pop("file_path", None)
+    logger.info("Run loaded run_id=%s status=%s phase=%s", run_id, result["status"], result["phase"])
     return result
 
 

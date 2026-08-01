@@ -82,6 +82,8 @@ export interface RecognitionTask {
   progress: number;
   createdAt: string;
   completedAt?: string;
+  /** 后端任务失败时的可读错误原因 */
+  error?: string;
   imageUrl: string;
   imageWidth: number;
   imageHeight: number;

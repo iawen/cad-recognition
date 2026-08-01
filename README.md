@@ -1,4 +1,35 @@
-# 技术文档索引
+# CAD 电气图纸识别
+
+## 启动开发环境
+
+在两个 PowerShell 终端中分别启动后端和前端。Python 虚拟环境只位于 `backend/.venv`；不要在仓库根目录创建虚拟环境。
+
+### 后端（终端 1）
+
+```powershell
+cd backend
+.venv\Scripts\activate.bat
+uv sync
+uv run python -m main
+```
+
+服务默认监听 <http://127.0.0.1:8001>，健康检查地址为 <http://127.0.0.1:8001/api/health>。
+
+首次运行或依赖变更时执行 `uv sync`；依赖已同步后，只需执行后两行。DWG 文件分析需要在 `backend/.env` 中配置 `ODA_FILE_CONVERTER`。VLM 功能默认关闭，只有配置模型端点并显式启用后才会调用。
+
+### 前端（终端 2）
+
+```powershell
+Set-Location .\frontend
+npm install
+npm run dev
+```
+
+前端默认由 Vite 提供地址（通常为 <http://127.0.0.1:5173>），并将 `/api` 请求代理至后端的 `http://127.0.0.1:8001`。
+
+首次运行或 `package.json` 变更时执行 `npm install`；依赖已安装后，只需执行后两行。
+
+## 技术文档索引
 
 ## 文档层级
 

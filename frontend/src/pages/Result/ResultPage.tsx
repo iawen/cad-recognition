@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { Spin, message } from 'antd';
+import { Alert, Spin, message } from 'antd';
 import { getTaskStatus, getSymbols, getTables, getTexts } from '../../api/recognition';
 import {
   RecognitionTask,
@@ -28,13 +28,17 @@ export default function ResultPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [taskRes, symbolsRes, tablesRes, textsRes] = await Promise.all([
-          getTaskStatus(taskId),
+        const taskRes = await getTaskStatus(taskId);
+        setTask(taskRes.data);
+        if (taskRes.data.status === 'failed') {
+          message.error(taskRes.data.error || '识别任务失败，请查看任务错误信息');
+          return;
+        }
+        const [symbolsRes, tablesRes, textsRes] = await Promise.all([
           getSymbols(taskId),
           getTables(taskId),
           getTexts(taskId),
         ]);
-        setTask(taskRes.data);
         setSymbols(symbolsRes.data);
         setTables(tablesRes.data);
         setTexts(textsRes.data);
@@ -89,6 +93,19 @@ export default function ResultPage() {
         }}
       >
         任务不存在
+      </div>
+    );
+  }
+
+  if (task.status === 'failed') {
+    return (
+      <div style={{ maxWidth: 720, margin: '64px auto', padding: '0 16px' }}>
+        <Alert
+          type="error"
+          showIcon
+          message="图纸识别失败"
+          description={task.error || '后端未返回具体错误，请查看后端日志。'}
+        />
       </div>
     );
   }

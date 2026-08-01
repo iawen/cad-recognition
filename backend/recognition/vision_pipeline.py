@@ -12,6 +12,7 @@ from pathlib import Path
 
 from cad.coordinates import CoordinateTransform
 from domain.models import CadPoint, ComponentCandidate, ComponentEvidence
+from recognition.component_catalog import get_component_definition, resolve_component_type
 from recognition.obb_detector import ObbDetector
 from recognition.vlm_detector import VlmDetector
 from rendering.dxf_renderer import render_dxf_to_png
@@ -58,12 +59,21 @@ def detect_visual_components(dxf_path: Path, *, detector: ObbDetector | VlmDetec
         candidates: list[ComponentCandidate] = []
         for tile in create_tiles(rendered, root / "tiles"):
             for detection in detector.detect(tile.path):
+                component_type = resolve_component_type(detection.label)
+                if component_type is None:
+                    continue
+                definition = get_component_definition(component_type)
                 global_center = CadPoint(x=tile.x_offset + detection.center_x, y=tile.y_offset + detection.center_y)
                 candidate = ComponentCandidate(
-                    id=f"vision_{len(candidates) + 1:04d}", type=detection.label,
+                    id=f"vision_{len(candidates) + 1:04d}", type=component_type,
                     cad_center=transform.pixel_to_cad(global_center), rotation_deg=detection.angle_deg,
                     source="vision", confidence=detection.confidence, review_status="pending",
-                    evidence=ComponentEvidence(block_name="", layer="", detection_model=detector.model_identifier),
+                    evidence=ComponentEvidence(
+                        block_name="", layer="", detection_model=detector.model_identifier,
+                        catalog_name=definition.display_name if definition else None,
+                        catalog_category=definition.category if definition else None,
+                        reference_assets=definition.reference_assets() if definition else {},
+                    ),
                 )
                 if not _is_duplicate(candidate, candidates):
                     candidates.append(candidate)

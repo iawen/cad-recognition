@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover
 from domain.errors import DrawingAnalysisError
 from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText, ParsedDxfDrawing
 from recognition.block_classifier import classify_block
+from recognition.component_catalog import get_component_definition
 
 
 def _point(value: Any) -> CadPoint:
@@ -64,12 +65,18 @@ def parse_dxf(path: Path, *, max_components: int = 1000) -> ParsedDxfDrawing:
         if component_type is None:
             unknown_blocks[block_name] += 1
         elif len(components) < max_components:
+            definition = get_component_definition(component_type)
             components.append(ComponentCandidate(
                 id=f"component_{len(components) + 1:04d}", type=component_type,
                 cad_center=_point(entity.dxf.insert),
                 rotation_deg=round(float(entity.dxf.get("rotation", 0.0)), 6),
                 confidence=0.98,
-                evidence=ComponentEvidence(block_name=block_name, layer=layer, attributes=_attributes(entity)),
+                evidence=ComponentEvidence(
+                    block_name=block_name, layer=layer, attributes=_attributes(entity),
+                    catalog_name=definition.display_name if definition else None,
+                    catalog_category=definition.category if definition else None,
+                    reference_assets=definition.reference_assets() if definition else {},
+                ),
             ))
 
     return ParsedDxfDrawing(

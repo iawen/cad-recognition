@@ -26,6 +26,9 @@ class ComponentEvidence(BaseModel):
     attributes: dict[str, str] = Field(default_factory=dict)
     text_ids: list[str] = Field(default_factory=list)
     detection_model: str | None = None
+    catalog_name: str | None = None
+    catalog_category: str | None = None
+    reference_assets: dict[str, str] = Field(default_factory=dict)
 
 
 class ComponentCandidate(BaseModel):

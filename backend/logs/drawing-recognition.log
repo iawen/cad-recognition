@@ -1,0 +1,53 @@
+2026-08-01 14:44:08 INFO [drawing-recognition] [MainThread] Repository initialized database=C:\work\cad-recognition\backend\data\runtime\recognition.db
+2026-08-01 14:44:08 INFO [drawing-recognition] [MainThread] Run created run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f filename=electrical.dxf file_path=C:\Users\chenz194\AppData\Local\Temp\1\tmpv9rbsdd6\electrical.dxf
+2026-08-01 14:44:08 INFO [drawing-recognition] [MainThread] Run updated run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f status=succeeded phase=done progress=100 result_saved=True error=
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17588eef8c0] Frontend task requested run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17588eef8c0] Run loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f status=succeeded phase=done
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17588eef8c0] Frontend task returned run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f status=succeeded phase=done
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090190] Frontend symbols requested run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090190] Run loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f status=succeeded phase=done
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090190] Completed result loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090190] Frontend symbols returned run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f count=1
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090410] Frontend texts requested run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090410] Run loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f status=succeeded phase=done
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090410] Completed result loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589090410] Frontend texts returned run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f count=1
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589019350] Frontend tables requested run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589019350] Run loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f status=succeeded phase=done
+2026-08-01 14:44:08 INFO [drawing-recognition] [asyncio-portal-17589019350] Completed result loaded run_id=d6dbad10-81c9-4374-ab7d-d98cc03d087f
+2026-08-01 14:44:10 INFO [drawing-recognition] [asyncio-portal-2748f890980] HTTP request method=GET path=/api/recognition/09a3f3b4-5f78-4fb4-ae94-b6f72c8088a3 client=testclient
+2026-08-01 14:44:10 INFO [drawing-recognition] [asyncio-portal-2748f890980] Frontend task requested run_id=09a3f3b4-5f78-4fb4-ae94-b6f72c8088a3
+2026-08-01 14:44:10 INFO [drawing-recognition] [asyncio-portal-2748f890980] Run loaded run_id=09a3f3b4-5f78-4fb4-ae94-b6f72c8088a3 status=failed phase=error
+2026-08-01 14:44:10 INFO [drawing-recognition] [asyncio-portal-2748f890980] Frontend task returned run_id=09a3f3b4-5f78-4fb4-ae94-b6f72c8088a3 status=failed phase=error
+2026-08-01 14:44:10 INFO [drawing-recognition] [asyncio-portal-2748f890980] HTTP response method=GET path=/api/recognition/09a3f3b4-5f78-4fb4-ae94-b6f72c8088a3 status=200 elapsed_ms=11.3
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] HTTP request method=POST path=/api/upload client=127.0.0.1
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] Frontend upload received filename=B电气图.dwg
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] Repository initialized database=C:\work\cad-recognition\backend\data\runtime\recognition.db
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] Run created run_id=aad8854b-c377-495d-978f-f118726ce528 filename=B电气图.dwg file_path=C:\work\cad-recognition\backend\data\runtime\uploads\1c62ee7049084207ae705c7218188082.dwg
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] Analysis queued run_id=aad8854b-c377-495d-978f-f118726ce528 drawing_path=C:\work\cad-recognition\backend\data\runtime\uploads\1c62ee7049084207ae705c7218188082.dwg
+2026-08-01 14:45:32 INFO [drawing-recognition] [drawing-recognition_0] Analysis started run_id=aad8854b-c377-495d-978f-f118726ce528 drawing_path=C:\work\cad-recognition\backend\data\runtime\uploads\1c62ee7049084207ae705c7218188082.dwg
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] Run creation accepted run_id=aad8854b-c377-495d-978f-f118726ce528 filename=B电气图.dwg size_bytes=7822583
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] Frontend upload accepted run_id=aad8854b-c377-495d-978f-f118726ce528
+2026-08-01 14:45:32 INFO [drawing-recognition] [MainThread] HTTP response method=POST path=/api/upload status=200 elapsed_ms=205.2
+2026-08-01 14:45:32 INFO [drawing-recognition] [drawing-recognition_0] Run updated run_id=aad8854b-c377-495d-978f-f118726ce528 status=running phase=preflight progress=10 result_saved=False error=
+2026-08-01 14:45:32 INFO [drawing-recognition] [drawing-recognition_0] Run updated run_id=aad8854b-c377-495d-978f-f118726ce528 status=running phase=vector_parse progress=45 result_saved=False error=
+2026-08-01 14:45:32 ERROR [drawing-recognition] [drawing-recognition_0] Analysis failed run_id=aad8854b-c377-495d-978f-f118726ce528 drawing_path=C:\work\cad-recognition\backend\data\runtime\uploads\1c62ee7049084207ae705c7218188082.dwg error=无法解析 DWG：未配置 ODA File Converter。请设置 ODA_FILE_CONVERTER 为 ODAFileConverter.exe 的绝对路径，或先转换为 DXF 后上传。
+Traceback (most recent call last):
+  File "C:\work\cad-recognition\backend\runtime\worker.py", line 26, in _run_analysis
+    result = analyze_drawing(drawing_path).model_dump()
+             ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "C:\work\cad-recognition\backend\service.py", line 24, in analyze_drawing
+    dxf_path, temporary_output = convert_dwg_to_dxf(path)
+                                 ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\work\cad-recognition\backend\ingest\dwg_converter.py", line 26, in convert_dwg_to_dxf
+    raise DrawingAnalysisError(
+    ...<2 lines>...
+    )
+domain.errors.DrawingAnalysisError: 无法解析 DWG：未配置 ODA File Converter。请设置 ODA_FILE_CONVERTER 为 ODAFileConverter.exe 的绝对路径，或先转换为 DXF 后上传。
+2026-08-01 14:45:32 INFO [drawing-recognition] [drawing-recognition_0] Run updated run_id=aad8854b-c377-495d-978f-f118726ce528 status=failed phase=error progress=100 result_saved=False error=无法解析 DWG：未配置 ODA File Converter。请设置 ODA_FILE_CONVERTER 为 ODAFileConverter.exe 的绝对路径，或先转换为 DXF 后上传。
+2026-08-01 14:45:34 INFO [drawing-recognition] [MainThread] HTTP request method=GET path=/api/recognition/aad8854b-c377-495d-978f-f118726ce528 client=127.0.0.1
+2026-08-01 14:45:34 INFO [drawing-recognition] [MainThread] Frontend task requested run_id=aad8854b-c377-495d-978f-f118726ce528
+2026-08-01 14:45:34 INFO [drawing-recognition] [MainThread] Run loaded run_id=aad8854b-c377-495d-978f-f118726ce528 status=failed phase=error
+2026-08-01 14:45:34 INFO [drawing-recognition] [MainThread] Frontend task returned run_id=aad8854b-c377-495d-978f-f118726ce528 status=failed phase=error
+2026-08-01 14:45:34 INFO [drawing-recognition] [MainThread] HTTP response method=GET path=/api/recognition/aad8854b-c377-495d-978f-f118726ce528 status=200 elapsed_ms=7.5
+2026-08-01 14:46:37 ERROR [drawing-recognition] [MainThread] DWG converter unavailable: ODA_FILE_CONVERTER is unset and ODAFileConverter is not on PATH.

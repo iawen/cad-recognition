@@ -17,9 +17,11 @@ from domain.models import CadPoint
 from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from ingest.file_validation import SUPPORTED_EXTENSIONS
+from recognition.component_catalog import CATALOG_SOURCE, catalog_capabilities
 from runtime.repository import UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
 from runtime.worker import submit_analysis
 from service import analyze_drawing
+from tools.logger import logger
 
 
 router = APIRouter()
@@ -27,13 +29,13 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 SAMPLE_DRAWING = Path(__file__).resolve().parent.parent / "data" / "B电气图.dwg"
 
 _COMPONENT_COLORS = {
-    "resistor": "#E74C3C",
-    "switch": "#3498DB",
-    "fuse": "#F1C40F",
-    "relay": "#9B59B6",
-    "connector": "#1ABC9C",
-    "capacitor": "#2ECC71",
-    "diode": "#E67E22",
+    "circuit_breaker": "#E74C3C", "current_transformer": "#3498DB",
+    "voltage_transformer": "#3F51B5", "surge_arrester": "#E67E22",
+    "fuse": "#F1C40F", "zero_sequence_current_transformer": "#795548",
+    "live_line_indicator": "#1ABC9C", "earthing_switch": "#9B59B6",
+    "ammeter": "#2ECC71", "voltmeter": "#3498DB", "thermal_relay": "#E91E63",
+    "contactor": "#8C8C8C", "capacitor": "#2ECC71",
+    "three_phase_shunt_capacitor_bank": "#27AE60", "transformer": "#5D6D7E",
 }
 
 
@@ -62,6 +64,7 @@ def _frontend_task(run: dict) -> dict[str, object]:
         "progress": run["progress"],
         "createdAt": run["created_at"],
         "completedAt": completed_at,
+        "error": run.get("error") if run["status"] == "failed" else None,
         # The current canvas renders its CAD diagram layer; these dimensions define
         # the normalized annotation coordinate space returned by the endpoints below.
         "imageUrl": "",
@@ -98,9 +101,15 @@ def _normalized_boxes(result: dict) -> tuple[dict[str, dict[str, float]], dict[s
 def _completed_result(run_id: str) -> dict:
     run = get_run(run_id)
     if run is None:
+        logger.warning("Completed result unavailable: run not found run_id=%s", run_id)
         raise HTTPException(404, "识别任务不存在。")
     if run["status"] != "succeeded" or run["result"] is None:
+        logger.warning(
+            "Completed result unavailable run_id=%s status=%s phase=%s error=%s",
+            run_id, run["status"], run["phase"], run.get("error") or "",
+        )
         raise HTTPException(409, "识别任务尚未完成。")
+    logger.info("Completed result loaded run_id=%s", run_id)
     return run["result"]
 
 
@@ -127,6 +136,8 @@ async def get_drawing_recognition_capabilities():
         "implemented": ["p0_batch_audit", "dxf_audit", "block_component_recognition", "native_text_extraction", "text_component_linking", "persistent_runs", "sse_progress"],
         "optional": ["png_rendering", "overlapping_tiling", "vlm_detection_when_enabled", "obb_detection_when_model_configured"],
         "not_implemented": ["paddleocr", "wire_tracing", "netlist", "human_review_workspace"],
+        "component_catalog_source": CATALOG_SOURCE,
+        "supported_components": catalog_capabilities(),
         "sample_available": SAMPLE_DRAWING.is_file(),
     }
 
@@ -164,20 +175,26 @@ async def analyze_uploaded_drawing(file: UploadFile = File(...)):
 @router.post("/api/upload")
 async def upload_for_frontend(file: UploadFile = File(...)):
     """Create the asynchronous task consumed by the confirmed upload page."""
+    logger.info("Frontend upload received filename=%s", file.filename)
     response = await create_recognition_run(file)
+    logger.info("Frontend upload accepted run_id=%s", response["run_id"])
     return _response({"taskId": response["run_id"]})
 
 
 @router.get("/api/recognition/{task_id}")
 async def get_frontend_task(task_id: str):
+    logger.info("Frontend task requested run_id=%s", task_id)
     run = get_run(task_id)
     if run is None:
+        logger.warning("Frontend task not found run_id=%s", task_id)
         raise HTTPException(404, "识别任务不存在。")
+    logger.info("Frontend task returned run_id=%s status=%s phase=%s", task_id, run["status"], run["phase"])
     return _response(_frontend_task(run))
 
 
 @router.get("/api/recognition/{task_id}/symbols")
 async def get_frontend_symbols(task_id: str):
+    logger.info("Frontend symbols requested run_id=%s", task_id)
     result = _completed_result(task_id)
     component_boxes, _ = _normalized_boxes(result)
     symbols = []
@@ -185,19 +202,23 @@ async def get_frontend_symbols(task_id: str):
         attributes = [{"key": key, "value": value} for key, value in component["evidence"].get("attributes", {}).items()]
         if component.get("value"):
             attributes.append({"key": "参数", "value": component["value"]})
-        name = component.get("reference") or component["type"]
+        catalog_name = component["evidence"].get("catalog_name")
+        catalog_category = component["evidence"].get("catalog_category")
+        name = component.get("reference") or catalog_name or component["type"]
         symbols.append({
             "id": component["id"], "name": name, "model": component.get("value"),
-            "category": component["type"], "quantity": 1, "attributes": attributes,
+            "category": catalog_category or component["type"], "quantity": 1, "attributes": attributes,
             "position": {"x": component["cad_center"]["x"], "y": component["cad_center"]["y"], "sheet": "页1"},
             "confidence": component["confidence"], "boundingBox": component_boxes.get(component["id"], {"x": 0, "y": 0, "width": 0.035, "height": 0.035}),
             "color": _COMPONENT_COLORS.get(component["type"], "#8C8C8C"),
         })
+    logger.info("Frontend symbols returned run_id=%s count=%s", task_id, len(symbols))
     return _response(symbols)
 
 
 @router.get("/api/recognition/{task_id}/tables")
 async def get_frontend_tables(task_id: str):
+    logger.info("Frontend tables requested run_id=%s", task_id)
     _completed_result(task_id)
     # BOM/table extraction is intentionally outside this feasibility-validation scope.
     return _response([])
@@ -205,6 +226,7 @@ async def get_frontend_tables(task_id: str):
 
 @router.get("/api/recognition/{task_id}/texts")
 async def get_frontend_texts(task_id: str):
+    logger.info("Frontend texts requested run_id=%s", task_id)
     result = _completed_result(task_id)
     _, text_boxes = _normalized_boxes(result)
     texts = []
@@ -218,6 +240,7 @@ async def get_frontend_texts(task_id: str):
             "position": {"x": text["cad_position"]["x"], "y": text["cad_position"]["y"], "sheet": "页1"},
             "boundingBox": text_boxes.get(text["id"], {"x": 0, "y": 0, "width": 0.06, "height": 0.024}),
         })
+    logger.info("Frontend texts returned run_id=%s count=%s", task_id, len(texts))
     return _response(texts)
 
 
@@ -227,6 +250,7 @@ async def create_recognition_run(file: UploadFile = File(...)):
     original_name = Path(file.filename or "").name
     suffix = Path(original_name).suffix.lower()
     if not original_name or suffix not in SUPPORTED_EXTENSIONS:
+        logger.warning("Run creation rejected filename=%s suffix=%s", original_name, suffix)
         raise HTTPException(400, "仅支持上传 .dwg 或 .dxf 文件。")
     UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     stored_path = UPLOAD_ROOT / f"{uuid.uuid4().hex}{suffix}"
@@ -243,6 +267,7 @@ async def create_recognition_run(file: UploadFile = File(...)):
         await file.close()
     run = create_run(original_name, stored_path)
     submit_analysis(run["id"], stored_path)
+    logger.info("Run creation accepted run_id=%s filename=%s size_bytes=%s", run["id"], original_name, size)
     return {"run_id": run["id"], "status": run["status"], "size_bytes": size}
 
 

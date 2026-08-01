@@ -16,10 +16,9 @@ from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 
+from recognition.component_catalog import supported_component_types
 
-SUPPORTED_COMPONENT_TYPES = (
-    "resistor", "switch", "fuse", "relay", "connector", "capacitor", "diode", "terminal", "unknown_symbol",
-)
+SUPPORTED_COMPONENT_TYPES = supported_component_types()
 _ENABLED_VALUES = {"1", "true", "yes", "on"}
 
 
