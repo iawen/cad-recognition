@@ -9,8 +9,23 @@ from domain.models import ComponentCandidate, NativeText
 
 
 REFERENCE_PREFIXES = {
-    "resistor": ("R",), "switch": ("S", "SA", "SB"), "fuse": ("F",),
-    "relay": ("K",), "connector": ("X", "J"), "capacitor": ("C",), "diode": ("D",),
+    # Common IEC/Chinese electrical-drawing designators. ATTRIB remains the
+    # authoritative source; these expressions only score nearby native text.
+    "circuit_breaker": ("QF", "Q"),
+    "current_transformer": ("TA", "CT"),
+    "voltage_transformer": ("TV", "PT"),
+    "surge_arrester": ("FV",),
+    "fuse": ("FU", "F"),
+    "zero_sequence_current_transformer": ("TA0", "TA", "CT0"),
+    "live_line_indicator": ("VP", "HL"),
+    "earthing_switch": ("QS",),
+    "ammeter": ("PA", "A"),
+    "voltmeter": ("PV", "V"),
+    "thermal_relay": ("FR", "KH"),
+    "contactor": ("KM",),
+    "capacitor": ("C",),
+    "three_phase_shunt_capacitor_bank": ("CB", "C"),
+    "transformer": ("T",),
 }
 VALUE_PATTERN = re.compile(
     r"\d+(?:\.\d+)?\s*(?:[kKmMuUnNpP](?:\s*(?:Ω|ohm|v|a|w|f|h))?|Ω|ohm|v|a|w|f|h)",

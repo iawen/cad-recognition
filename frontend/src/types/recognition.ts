@@ -84,6 +84,8 @@ export interface RecognitionTask {
   completedAt?: string;
   /** 后端任务失败时的可读错误原因 */
   error?: string;
+  /** 任务完成但可选视觉识别未执行时的可读原因 */
+  warning?: string;
   imageUrl: string;
   imageWidth: number;
   imageHeight: number;

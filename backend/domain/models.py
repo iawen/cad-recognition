@@ -29,6 +29,8 @@ class ComponentEvidence(BaseModel):
     catalog_name: str | None = None
     catalog_category: str | None = None
     reference_assets: dict[str, str] = Field(default_factory=dict)
+    detection_bbox_px: list[float] | None = None
+    detection_tile: str | None = None
 
 
 class ComponentCandidate(BaseModel):

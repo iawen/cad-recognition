@@ -12,19 +12,29 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api import router
-from domain.models import CadPoint
+from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText
 from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
+from fusion.text_association import associate_native_text
 from rendering.dxf_renderer import render_dxf_to_png
 from rendering.tiling import create_tiles
 from recognition.vlm_detector import VlmDetector
+from recognition.vlm_detector import VlmDetection
+from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
 from recognition.component_catalog import COMPONENT_CATALOG
+from recognition.reference_icons import extract_excel_reference_icons, reference_icon_summary
 from runtime.repository import create_run, update_run
 from runtime.worker import _run_analysis
 from service import analyze_drawing
 
 
 class P0ToP2RegressionTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not call a locally configured external VLM endpoint.
+        visual_detector = patch("service.detect_visual_components", return_value=[])
+        visual_detector.start()
+        self.addCleanup(visual_detector.stop)
+
     def _create_dxf(self, root: Path) -> Path:
         path = root / "electrical.dxf"
         document = ezdxf.new("R2018")
@@ -127,6 +137,54 @@ class P0ToP2RegressionTests(unittest.TestCase):
             {"断路器", "电流互感器", "电压互感器", "避雷器", "熔断器", "零序电流互感器", "带电显示器", "接地开关", "电流表", "电压表", "热继电器", "接触器", "电容器", "三相并联电容器组", "变压器"},
         )
 
+    def test_excel_embedded_icons_are_extracted_and_mapped_to_all_classes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            icons = extract_excel_reference_icons(cache_root=Path(temp_dir))
+        self.assertEqual(len(icons), 21)
+        self.assertEqual({icon.component_type for icon in icons}, {item.type for item in COMPONENT_CATALOG})
+        self.assertTrue(all(icon.path.suffix == ".png" for icon in icons))
+        summary = reference_icon_summary()
+        self.assertEqual(summary["classes_with_icons"], 15)
+
+    def test_vlm_prompt_uses_one_excel_reference_for_each_component_class(self):
+        detector = VlmDetector()
+        detector.use_excel_references = True
+        detector.reference_limit = 15
+        content = detector._reference_content()
+        self.assertEqual(len(content), 30)
+        self.assertIn("circuit_breaker", str(content))
+        self.assertIn("visual references", detector._prompt(True))
+
+    def test_native_text_rules_support_canonical_component_types(self):
+        component = ComponentCandidate(
+            id="cmp_1", type="circuit_breaker", cad_center=CadPoint(x=10, y=10), rotation_deg=0,
+            confidence=0.9, evidence=ComponentEvidence(block_name="CIRCUIT_BREAKER", layer="0"),
+        )
+        texts = [NativeText(id="txt_1", content="QF1", entity_type="TEXT", layer="0", cad_position=CadPoint(x=11, y=10))]
+        associated = associate_native_text([component], texts)
+        self.assertEqual(associated[0].reference, "QF1")
+
+    def test_visual_pipeline_falls_back_to_obb_after_vlm_failure(self):
+        class ConfiguredObb:
+            enabled = True
+            model_identifier = "test-obb"
+
+            @staticmethod
+            def detect(_image_path: Path):
+                return [VlmDetection("circuit_breaker", 0.8, 10, 10, 8, 8, 0)]
+
+        detector = VlmDetector()
+        detector.enabled = True
+        detector.detect = Mock(side_effect=RuntimeError("vision endpoint rejected image"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            drawing = self._create_dxf(Path(temp_dir))
+            with patch("recognition.vision_pipeline.ObbDetector", return_value=ConfiguredObb()):
+                components, audit = detect_visual_components(drawing, detector=detector, include_audit=True)
+
+        self.assertGreaterEqual(len(components), 1)
+        self.assertEqual(components[0].type, "circuit_breaker")
+        self.assertEqual(len(audit["fallbacks"]), 1)
+
     def test_worker_marks_serialized_result_as_succeeded(self):
         analysis = Mock()
         analysis.model_dump.return_value = {
@@ -140,6 +198,25 @@ class P0ToP2RegressionTests(unittest.TestCase):
 
         self.assertEqual(update_run_mock.call_args_list[-1].kwargs["status"], "succeeded")
         self.assertEqual(update_run_mock.call_args_list[-1].kwargs["result"], analysis.model_dump.return_value)
+
+    def test_visual_model_failure_keeps_vector_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            drawing = self._create_dxf(Path(temp_dir))
+            with patch("service.detect_visual_components", side_effect=RuntimeError("VLM 请求失败，HTTP 状态码：400。")):
+                result = analyze_drawing(drawing)
+
+        self.assertEqual(result.summary["component_count"], 1)
+        self.assertIn("视觉识别未执行", result.audit["limitations"][0])
+
+    def test_visual_failure_persists_safe_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            drawing = self._create_dxf(Path(temp_dir))
+            failure = VisualDetectionError("VLM 请求超时。", {"failed_tile": "tile_0_0.png", "tile_requests": [{"outcome": "timeout"}]})
+            with patch("service.detect_visual_components", side_effect=failure):
+                result = analyze_drawing(drawing)
+
+        self.assertEqual(result.audit["visual_detection"]["failed_tile"], "tile_0_0.png")
+        self.assertEqual(result.audit["visual_detection"]["tile_requests"][0]["outcome"], "timeout")
 
 
 if __name__ == "__main__":

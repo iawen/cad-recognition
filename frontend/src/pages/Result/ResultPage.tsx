@@ -122,6 +122,16 @@ export default function ResultPage() {
       {/* 顶部信息栏 */}
       <ResultHeader task={task} />
 
+      {task.warning && (
+        <Alert
+          type="warning"
+          showIcon
+          message="视觉元件识别未完成"
+          description={task.warning}
+          style={{ margin: '12px 16px 0' }}
+        />
+      )}
+
       {/* 主体：左右分栏 */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* 左侧面板 */}

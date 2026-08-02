@@ -18,6 +18,7 @@ from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from ingest.file_validation import SUPPORTED_EXTENSIONS
 from recognition.component_catalog import CATALOG_SOURCE, catalog_capabilities
+from recognition.reference_icons import reference_icon_summary
 from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
 from runtime.worker import submit_analysis
 from service import analyze_drawing
@@ -80,6 +81,8 @@ def _frontend_task(run: dict) -> dict[str, object]:
     completed_at = run["updated_at"] if run["status"] in {"succeeded", "failed"} else None
     size = get_run_path(run["id"])
     render_path = _ensure_run_render(run)
+    limitations = (run.get("result") or {}).get("audit", {}).get("limitations", [])
+    visual_warning = next((item for item in limitations if item.startswith("视觉识别未执行：")), None)
     return {
         "taskId": run["id"],
         "fileName": run["filename"],
@@ -89,6 +92,7 @@ def _frontend_task(run: dict) -> dict[str, object]:
         "createdAt": run["created_at"],
         "completedAt": completed_at,
         "error": run.get("error") if run["status"] == "failed" else None,
+        "warning": visual_warning,
         "imageUrl": f"/api/recognition/{run['id']}/drawing" if render_path else "",
         "imageWidth": 1200,
         "imageHeight": 900,
@@ -160,6 +164,7 @@ async def get_drawing_recognition_capabilities():
         "not_implemented": ["paddleocr", "wire_tracing", "netlist", "human_review_workspace"],
         "component_catalog_source": CATALOG_SOURCE,
         "supported_components": catalog_capabilities(),
+        "excel_reference_icons": reference_icon_summary(),
         "sample_available": SAMPLE_DRAWING.is_file(),
     }
 

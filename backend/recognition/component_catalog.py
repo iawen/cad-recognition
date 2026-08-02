@@ -30,10 +30,14 @@ class ComponentDefinition:
         """Return supplied matching DWG/WMF files when this catalog row has them."""
         if self.reference_stem is None:
             return {}
+        matches = {
+            path.suffix.casefold(): path
+            for path in REFERENCE_ROOT.glob(f"{self.reference_stem}.*")
+            if path.suffix.casefold() in {".dwg", ".wmf"}
+        }
         return {
             suffix.lstrip("."): str(path.relative_to(REFERENCE_ROOT.parents[1]).as_posix())
-            for suffix in (".dwg", ".wmf")
-            if (path := REFERENCE_ROOT / f"{self.reference_stem}{suffix}").is_file()
+            for suffix, path in matches.items()
         }
 
 
