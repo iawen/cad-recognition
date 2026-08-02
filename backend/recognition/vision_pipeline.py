@@ -147,6 +147,7 @@ def detect_visual_components(
                 )
                 if not _is_duplicate(component_type, global_bbox, candidates):
                     candidates.append((candidate, global_bbox))
+            time.sleep(30)
         audit.update({
             "active_detector": active_detector.model_identifier,
             "raw_detection_count": raw_detection_count,
