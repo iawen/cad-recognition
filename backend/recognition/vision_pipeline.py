@@ -126,6 +126,7 @@ def detect_visual_components(
             for tile in tiles:
                 try:
                     detections = active_detector.detect(tile.path)
+<<<<<<< HEAD
                 except RuntimeError as exc:
                     if active_detector is primary and fallback and fallback.enabled:
                         logger.warning("VLM tile failed; falling back to OBB tile=%s error=%s", tile.path.name, exc)
@@ -176,6 +177,51 @@ def detect_visual_components(
                         candidates.append((region.name, candidate, global_bbox))
         audit["tile_count"] = sum(item["tile_count"] for item in audit["regions"])
         audit["vision_dpi"] = vision_dpi
+=======
+                else:
+                    request_metadata = getattr(active_detector, "last_request_metadata", None)
+                    if request_metadata:
+                        audit["tile_requests"].append(dict(request_metadata))
+                    audit.update({
+                        "active_detector": active_detector.model_identifier,
+                        "failed_tile": tile.path.name,
+                        "failure": str(exc),
+                        "duration_ms": round((time.perf_counter() - started) * 1000),
+                    })
+                    raise VisualDetectionError(str(exc), audit) from exc
+            request_metadata = getattr(active_detector, "last_request_metadata", None)
+            if request_metadata:
+                audit["tile_requests"].append(dict(request_metadata))
+            for detection in detections:
+                raw_detection_count += 1
+                component_type = resolve_component_type(detection.label)
+                if component_type is None:
+                    continue
+                definition = get_component_definition(component_type)
+                global_center = CadPoint(x=tile.x_offset + detection.center_x, y=tile.y_offset + detection.center_y)
+                global_bbox = (
+                    tile.x_offset + detection.center_x - detection.width / 2,
+                    tile.y_offset + detection.center_y - detection.height / 2,
+                    tile.x_offset + detection.center_x + detection.width / 2,
+                    tile.y_offset + detection.center_y + detection.height / 2,
+                )
+                candidate = ComponentCandidate(
+                    id=f"vision_{len(candidates) + 1:04d}", type=component_type,
+                    cad_center=transform.pixel_to_cad(global_center), rotation_deg=detection.angle_deg,
+                    source="vision", confidence=detection.confidence, review_status="pending",
+                    evidence=ComponentEvidence(
+                        block_name="", layer="", detection_model=detector.model_identifier,
+                        catalog_name=definition.display_name if definition else None,
+                        catalog_category=definition.category if definition else None,
+                        reference_assets=definition.reference_assets() if definition else {},
+                        detection_bbox_px=[round(value, 2) for value in global_bbox],
+                        detection_tile=tile.path.name,
+                    ),
+                )
+                if not _is_duplicate(component_type, global_bbox, candidates):
+                    candidates.append((candidate, global_bbox))
+            time.sleep(30)
+>>>>>>> 35cb233fc87d2fdf94b37285a65d5fd33b6a7179
         audit.update({
             "active_detector": active_detector.model_identifier,
             "raw_detection_count": raw_detection_count,

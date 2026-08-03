@@ -25,8 +25,14 @@ doc = odafc.readfile("B电气图.dwg")
 
 # 例如，遍历模型空间中的所有实体
 msp = doc.modelspace()
-for entity in msp:
-    print(entity)
+for block_ref in msp.query('INSERT'):
+    # 获取该图块的定义
+    block_def = doc.blocks.get(block_ref.dxf.name)
+    # 遍历图块定义中的所有实体，查找属性定义 (ATTDEF)
+    for entity in block_def:
+        if entity.dxftype() == 'ATTDEF':
+            # 这里可以获取到属性的标签 (tag) 和默认值等
+            print(f"找到属性文本: 标签={entity.dxf.tag}, 默认值={entity.dxf.text}")
 
 # 如果需要，可以将加载后的文档保存为 DXF 文件
-doc.saveas('B电气图_v2.dxf')
+# doc.saveas('B电气图_v2.dxf')
