@@ -27,6 +27,7 @@ from recognition.reference_icons import extract_excel_reference_icons, reference
 from runtime.repository import create_run, update_run
 from runtime.worker import _run_analysis
 from service import analyze_drawing
+from tools.vlm_capacitor_probe import _prepare_crop
 
 
 class P0ToP2RegressionTests(unittest.TestCase):
@@ -151,6 +152,19 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual(len(detections), 1)
         self.assertEqual(detections[0].label, "circuit_breaker")
         self.assertEqual(detections[0].center_x, 30)
+
+    def test_vlm_probe_prepares_contrast_enhanced_upscaled_crop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.png"
+            target = root / "crop.png"
+            from PIL import Image
+            Image.new("RGB", (100, 80), "#202830").save(source)
+
+            _prepare_crop(source, target, (10, 20, 60, 50), scale=4)
+
+            with Image.open(target) as crop:
+                self.assertEqual(crop.size, (200, 120))
 
     def test_repository_sample_is_available_to_api(self):
         app = FastAPI()

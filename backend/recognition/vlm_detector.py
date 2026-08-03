@@ -53,6 +53,10 @@ class VlmDetector:
         )
         self.temperature = float(os.getenv("DRAWING_VLM_TEMPERATURE", "1"))
         self.timeout_seconds = max(5, int(os.getenv("DRAWING_VLM_TIMEOUT_SECONDS", "30")))
+        # Reasoning tokens add latency/cost but do not improve a constrained
+        # image-to-JSON detector. Enable only for providers that support this
+        # OpenAI-compatible request extension.
+        self.disable_thinking = os.getenv("DRAWING_VLM_DISABLE_THINKING", "false").casefold() in _ENABLED_VALUES
         self.use_excel_references = os.getenv("DRAWING_VLM_USE_EXCEL_REFERENCES", "true").casefold() in _ENABLED_VALUES
         # A full 15-image catalogue plus a dense drawing tile is unnecessarily
         # large for most gateways. Users can increase this after a model probe.
@@ -100,11 +104,14 @@ class VlmDetector:
                 },
             ],
         }
+        if self.disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
         self.last_request_metadata = {
             "model": self.model_identifier,
             "tile": image_path.name,
             "temperature": self.temperature,
             "timeout_seconds": self.timeout_seconds,
+            "thinking_disabled": self.disable_thinking,
             "reference_icon_count": len(references) // 2,
             "started_at_unix_ms": round(time.time() * 1000),
         }
