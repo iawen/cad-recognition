@@ -151,6 +151,8 @@ export default function ResultPage() {
             texts={filteredTexts}
             sheetIndex={selectedSheetIndex}
             imageUrl={task.imageUrl}
+            imageWidth={task.imageWidth}
+            imageHeight={task.imageHeight}
           />
         </div>
       </div>

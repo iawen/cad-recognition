@@ -77,10 +77,25 @@ def _ensure_run_render(run: dict) -> Path | None:
     return render_path if render_path.is_file() else None
 
 
+def _render_dimensions(render_path: Path | None) -> tuple[int, int]:
+    """Read the rendered PNG dimensions for clients that project annotations."""
+    if render_path is None:
+        return 0, 0
+    try:
+        from PIL import Image
+
+        with Image.open(render_path) as image:
+            return image.size
+    except OSError:
+        logger.warning("Cannot read rendered image dimensions path=%s", render_path)
+        return 0, 0
+
+
 def _frontend_task(run: dict) -> dict[str, object]:
     completed_at = run["updated_at"] if run["status"] in {"succeeded", "failed"} else None
     size = get_run_path(run["id"])
     render_path = _ensure_run_render(run)
+    image_width, image_height = _render_dimensions(render_path)
     limitations = (run.get("result") or {}).get("audit", {}).get("limitations", [])
     visual_warning = next((item for item in limitations if item.startswith("视觉识别未执行：")), None)
     return {
@@ -94,8 +109,8 @@ def _frontend_task(run: dict) -> dict[str, object]:
         "error": run.get("error") if run["status"] == "failed" else None,
         "warning": visual_warning,
         "imageUrl": f"/api/recognition/{run['id']}/drawing" if render_path else "",
-        "imageWidth": 1200,
-        "imageHeight": 900,
+        "imageWidth": image_width,
+        "imageHeight": image_height,
         "sheets": [{"index": 0, "name": "模型空间"}],
     }
 

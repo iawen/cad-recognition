@@ -11,14 +11,24 @@ interface CanvasViewerProps {
   texts: ExtractedText[];
   sheetIndex: number;
   imageUrl: string;
+  imageWidth: number;
+  imageHeight: number;
 }
 
-const STAGE_WIDTH = 1200;
-const STAGE_HEIGHT = 900;
-const MIN_SCALE = 0.5;
+const FALLBACK_IMAGE_WIDTH = 1200;
+const FALLBACK_IMAGE_HEIGHT = 900;
+const MIN_SCALE = 0.05;
 const MAX_SCALE = 3;
 
-export default function CanvasViewer({ symbols, tables, texts, sheetIndex, imageUrl }: CanvasViewerProps) {
+export default function CanvasViewer({
+  symbols,
+  tables,
+  texts,
+  sheetIndex,
+  imageUrl,
+  imageWidth,
+  imageHeight,
+}: CanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [scale, setScale] = useState(1);
@@ -45,6 +55,21 @@ export default function CanvasViewer({ symbols, tables, texts, sheetIndex, image
       image.onerror = null;
     };
   }, [imageUrl]);
+
+  // Fit the complete drawing without changing its native width-to-height ratio.
+  useEffect(() => {
+    if (!drawingImage || stageSize.width <= 0 || stageSize.height <= 0) return;
+    const fitScale = Math.min(
+      stageSize.width / drawingImage.naturalWidth,
+      stageSize.height / drawingImage.naturalHeight,
+    );
+    const nextScale = Math.min(Math.max(fitScale, MIN_SCALE), MAX_SCALE);
+    setScale(nextScale);
+    setPosition({
+      x: (stageSize.width - drawingImage.naturalWidth * nextScale) / 2,
+      y: (stageSize.height - drawingImage.naturalHeight * nextScale) / 2,
+    });
+  }, [drawingImage, sheetIndex]);
 
   // 响应式调整画布大小
   useEffect(() => {
@@ -84,6 +109,9 @@ export default function CanvasViewer({ symbols, tables, texts, sheetIndex, image
       y: pointer.y - mousePointTo.y * newScale,
     });
   }, [scale, position]);
+
+  const renderedWidth = drawingImage?.naturalWidth || imageWidth || FALLBACK_IMAGE_WIDTH;
+  const renderedHeight = drawingImage?.naturalHeight || imageHeight || FALLBACK_IMAGE_HEIGHT;
 
   return (
     <div
@@ -130,7 +158,7 @@ export default function CanvasViewer({ symbols, tables, texts, sheetIndex, image
         {/* 优先展示当前上传图纸的渲染结果；没有底图时才使用示意图。 */}
         <Layer key={`diagram-${sheetIndex}`}>
           {drawingImage ? (
-            <KonvaImage image={drawingImage} x={0} y={0} width={STAGE_WIDTH} height={STAGE_HEIGHT} />
+            <KonvaImage image={drawingImage} x={0} y={0} width={renderedWidth} height={renderedHeight} />
           ) : (
             <CadDiagramLayer sheetIndex={sheetIndex} symbols={symbols} />
           )}
@@ -142,8 +170,8 @@ export default function CanvasViewer({ symbols, tables, texts, sheetIndex, image
             symbols={symbols}
             tables={tables}
             texts={texts}
-            imageWidth={STAGE_WIDTH}
-            imageHeight={STAGE_HEIGHT}
+            imageWidth={renderedWidth}
+            imageHeight={renderedHeight}
             scale={scale}
           />
         </Layer>

@@ -16,7 +16,8 @@ from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, Nativ
 from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from fusion.text_association import associate_native_text
-from rendering.dxf_renderer import render_dxf_to_png
+from rendering.dxf_renderer import render_dxf_region_to_png, render_dxf_to_png
+from rendering.regions import DrawingRegion, detect_drawing_regions
 from rendering.tiling import create_tiles
 from recognition.vlm_detector import VlmDetector
 from recognition.vlm_detector import VlmDetection
@@ -81,6 +82,31 @@ class P0ToP2RegressionTests(unittest.TestCase):
             tiles = create_tiles(image, root / "tiles", tile_size=256, overlap=32)
         self.assertTrue(tiles)
 
+    def test_detects_large_rectangular_drawing_regions(self):
+        document = ezdxf.new("R2018")
+        layout = document.modelspace()
+        for origin_x, origin_y in ((0, 60), (100, 60), (0, 0), (100, 0)):
+            layout.add_lwpolyline(
+                [(origin_x, origin_y), (origin_x + 80, origin_y), (origin_x + 80, origin_y + 40), (origin_x, origin_y + 40)],
+                close=True,
+            )
+
+        regions = detect_drawing_regions(layout)
+
+        self.assertEqual(len(regions), 4)
+        self.assertEqual(regions[0].name, "region_01")
+        self.assertEqual((regions[0].min_x, regions[0].min_y), (0.0, 60.0))
+        self.assertEqual((regions[-1].min_x, regions[-1].min_y), (100.0, 0.0))
+
+    def test_renders_detected_region_at_high_dpi(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            drawing = self._create_dxf(root)
+            region = DrawingRegion("region_01", 0, 10, 20, 30)
+            image = render_dxf_region_to_png(drawing, root / "region.png", region, dpi=72, max_size_inches=2)
+            self.assertTrue(image.exists())
+            self.assertGreater(image.stat().st_size, 0)
+
     def test_frontend_result_endpoints(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             drawing = self._create_dxf(Path(temp_dir))
@@ -101,6 +127,8 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual(task.status_code, 200)
         self.assertEqual(task.json()["data"]["status"], "completed")
         self.assertEqual(task.json()["data"]["imageUrl"], f"/api/recognition/{run['id']}/drawing")
+        self.assertGreater(task.json()["data"]["imageWidth"], 0)
+        self.assertGreater(task.json()["data"]["imageHeight"], 0)
         self.assertEqual(drawing.status_code, 200)
         self.assertEqual(drawing.headers["content-type"], "image/png")
         self.assertEqual(symbols.status_code, 200)
