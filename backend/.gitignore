@@ -2,6 +2,8 @@
 data/runtime/
 data/models/
 data/renders/
+logs/
+.venv/
 .env
 __pycache__/
 *.py[cod]
