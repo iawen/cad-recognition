@@ -21,6 +21,8 @@ from rendering.regions import DrawingRegion, detect_drawing_regions
 from rendering.tiling import create_tiles
 from recognition.vlm_detector import VlmDetector
 from recognition.vlm_detector import VlmDetection
+from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
+from recognition.vector_template_matcher import Segment, match_template
 from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
 from recognition.component_catalog import COMPONENT_CATALOG
 from recognition.reference_icons import extract_excel_reference_icons, reference_icon_summary
@@ -86,6 +88,30 @@ class P0ToP2RegressionTests(unittest.TestCase):
             image = render_dxf_to_png(drawing, root / "drawing.png", dpi=72)
             tiles = create_tiles(image, root / "tiles", tile_size=256, overlap=32)
         self.assertTrue(tiles)
+
+    def test_vector_template_matcher_finds_scaled_rotated_symbol(self):
+        template = [
+            Segment(0, 0, 0, 10),
+            Segment(-5, 10, 0, 20),
+            Segment(0, 20, 0, 30),
+            Segment(-1, 19, 1, 21),
+        ]
+        # Template rotated 90 degrees, scaled by 0.1, and translated to (100, 50).
+        target = [
+            Segment(100, 50, 99, 50),
+            Segment(99, 49.5, 98, 50),
+            Segment(98, 50, 97, 50),
+            Segment(98.1, 49.9, 97.9, 50.1),
+            Segment(20, 20, 21, 20),
+        ]
+
+        matches = match_template(template, target, endpoint_tolerance=0.01)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].matched_segments, 4)
+        self.assertEqual(matches[0].template_segments, 4)
+        self.assertAlmostEqual(matches[0].scale, 0.1)
+        self.assertAlmostEqual(matches[0].rotation_deg, 90.0)
 
     def test_realdwg_environment_switch_selects_sidecar(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -243,6 +269,19 @@ class P0ToP2RegressionTests(unittest.TestCase):
             {item.display_name for item in COMPONENT_CATALOG},
             {"断路器", "电流互感器", "电压互感器", "避雷器", "熔断器", "零序电流互感器", "带电显示器", "接地开关", "电流表", "电压表", "热继电器", "接触器", "电容器", "三相并联电容器组", "变压器"},
         )
+
+    def test_component_evidence_library_is_loaded_into_vlm_prompt(self):
+        evidence = load_component_evidence()
+        self.assertIn("circuit_breaker", evidence)
+        self.assertIn("QF\\d+", evidence["circuit_breaker"]["label_patterns"])
+        self.assertIn("text alone", visual_evidence_prompt(evidence))
+
+        detector = VlmDetector()
+        detector.component_evidence = evidence
+        prompt = detector._prompt()
+        self.assertIn("circuit_breaker", prompt)
+        self.assertIn("QF\\d+", prompt)
+        self.assertIn("Bounding boxes must cover the symbol, not its label", prompt)
 
     def test_excel_embedded_icons_are_extracted_and_mapped_to_all_classes(self):
         with tempfile.TemporaryDirectory() as temp_dir:

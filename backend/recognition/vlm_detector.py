@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv
 
 from recognition.component_catalog import supported_component_types
+from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
 from recognition.reference_icons import vlm_reference_images
 
 SUPPORTED_COMPONENT_TYPES = supported_component_types()
@@ -71,6 +72,9 @@ class VlmDetector:
         # A full 15-image catalogue plus a dense drawing tile is unnecessarily
         # large for most gateways. Users can increase this after a model probe.
         self.reference_limit = max(0, int(os.getenv("DRAWING_VLM_REFERENCE_LIMIT", "4")))
+        # Human-maintained visual and label corroboration rules. Invalid local
+        # entries are ignored by the loader rather than blocking recognition.
+        self.component_evidence = load_component_evidence()
         # Contains no endpoint URL, authorization header, or prompt/image data.
         self.last_request_metadata: dict[str, object] = {}
 
@@ -123,6 +127,7 @@ class VlmDetector:
             "timeout_seconds": self.timeout_seconds,
             "thinking_disabled": self.disable_thinking,
             "reference_icon_count": len(references) // 2,
+            "component_evidence_count": len(self.component_evidence),
             "started_at_unix_ms": round(time.time() * 1000),
         }
         started = time.perf_counter()
@@ -229,16 +234,17 @@ class VlmDetector:
             ])
         return content
 
-    @staticmethod
-    def _prompt(has_references: bool = False) -> str:
+    def _prompt(self, has_references: bool = False) -> str:
         labels = ", ".join(SUPPORTED_COMPONENT_TYPES)
         reference_instruction = (
             " The preceding labelled images are visual references only; use them to distinguish the allowed classes."
             if has_references else ""
         )
+        evidence_instruction = visual_evidence_prompt(self.component_evidence)
         return (
             "Find only visible electrical symbols in this image tile. Allowed types: " + labels + ". "
             + reference_instruction + " "
+            + evidence_instruction + " "
             "Return exactly this JSON object: {\"components\":[{\"type\":string,\"bbox\":[xmin,ymin,xmax,ymax],"
             "\"confidence\":number,\"rotation_deg\":number}]}. bbox coordinates are pixels in this tile; "
             "use 0<=xmin<xmax and 0<=ymin<ymax. Return an empty components array if no allowed symbol is visible."
