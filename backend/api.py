@@ -368,6 +368,7 @@ async def get_frontend_texts(task_id: str):
         texts.append({
             "id": text["id"], "content": content, "type": text_type, "layer": text["layer"],
             "source": text.get("source", "dxf"), "confidence": text.get("confidence", 1.0),
+            "componentId": text.get("component_id"), "componentType": text.get("component_type"),
             "position": {"x": text["cad_position"]["x"], "y": text["cad_position"]["y"], "sheet": f"页{(_base_image_for_record(base_images, text, text['cad_position']) or {'index': 0})['index'] + 1}"},
             "boundingBox": text_boxes.get(text["id"], {"x": 0, "y": 0, "width": 0.06, "height": 0.024}),
         })

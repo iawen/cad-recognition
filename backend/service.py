@@ -8,7 +8,7 @@ from pathlib import Path
 from cad.dxf_parser import parse_dxf
 from domain.models import DrawingAnalysisResult
 from fusion.result_assembler import assemble_vector_result
-from fusion.text_association import associate_native_text
+from fusion.text_association import associate_component_texts
 from ingest.dwg_converter import convert_dwg_to_dxf
 from ingest.file_validation import validate_drawing_file
 from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
@@ -45,7 +45,7 @@ def _frame_index(point: object, regions: list[DrawingRegion]) -> int | None:
 
 
 def _associate_text_per_frame(parsed: object, regions: list[DrawingRegion]) -> None:
-    """Prevent similarly named labels in neighbouring frames from cross-associating."""
+    """Associate only component-relevant text within the same drawing frame."""
     components_by_frame: dict[int | None, list] = {}
     texts_by_frame: dict[int | None, list] = {}
     for component in parsed.components:  # type: ignore[attr-defined]
@@ -54,8 +54,11 @@ def _associate_text_per_frame(parsed: object, regions: list[DrawingRegion]) -> N
     for text in parsed.texts:  # type: ignore[attr-defined]
         text.frame_index = _frame_index(text.cad_position, regions)
         texts_by_frame.setdefault(text.frame_index, []).append(text)
+    retained_texts: list = []
     for frame_index, components in components_by_frame.items():
-        associate_native_text(components, texts_by_frame.get(frame_index, []))
+        _, associated = associate_component_texts(components, texts_by_frame.get(frame_index, []))
+        retained_texts.extend(associated)
+    parsed.texts = retained_texts  # type: ignore[attr-defined]
 
 
 def analyze_drawing(
@@ -80,7 +83,6 @@ def analyze_drawing(
             base_images = []
         if render_output_path is not None:
             render_dxf_to_png(dxf_path, render_output_path)
-        _associate_text_per_frame(parsed, regions)
         visual_error: str | None = None
         try:
             visual_response = detect_visual_components(dxf_path, include_audit=True)
@@ -118,6 +120,7 @@ def analyze_drawing(
             visual_texts, visual_text_audit, visual_text_error = [], {}, str(exc)
             logger.warning("VLM text extraction skipped source=%s error=%s", path, exc)
         parsed.texts.extend(visual_texts)
+        _associate_text_per_frame(parsed, regions)
         result = assemble_vector_result(path, suffix, temporary_output is not None, parsed)
         if visual_audit:
             result.audit["visual_detection"] = visual_audit

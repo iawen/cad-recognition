@@ -15,7 +15,7 @@ from api import router
 from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText
 from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
-from fusion.text_association import associate_native_text
+from fusion.text_association import associate_component_texts, associate_native_text
 from rendering.dxf_renderer import render_dxf_region_to_png, render_dxf_to_png
 from rendering.regions import DrawingRegion, detect_drawing_regions
 from rendering.tiling import create_tiles
@@ -236,13 +236,14 @@ class P0ToP2RegressionTests(unittest.TestCase):
             from PIL import Image
             Image.new("RGB", (100, 80), "white").save(image_path)
             texts = VlmDetector._parse_texts(
-                '{"texts":[{"content":"QF1","bbox":[10,20,50,40],"confidence":0.9},'
+                '{"texts":[{"content":"QF1","component_type":"circuit_breaker","bbox":[10,20,50,40],"confidence":0.9},'
                 '{"content":"","bbox":[0,0,1,1],"confidence":1}]}',
                 image_path,
             )
         self.assertEqual(len(texts), 1)
         self.assertEqual(texts[0].content, "QF1")
         self.assertEqual(texts[0].center_x, 30)
+        self.assertEqual(texts[0].component_type, "circuit_breaker")
 
     def test_vlm_probe_prepares_contrast_enhanced_upscaled_crop(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -309,6 +310,23 @@ class P0ToP2RegressionTests(unittest.TestCase):
         texts = [NativeText(id="txt_1", content="QF1", entity_type="TEXT", layer="0", cad_position=CadPoint(x=11, y=10))]
         associated = associate_native_text([component], texts)
         self.assertEqual(associated[0].reference, "QF1")
+
+    def test_component_text_association_discards_unrelated_text(self):
+        component = ComponentCandidate(
+            id="cmp_1", type="circuit_breaker", cad_center=CadPoint(x=10, y=10), rotation_deg=0,
+            confidence=0.9, evidence=ComponentEvidence(block_name="", layer="0"),
+        )
+        texts = [
+            NativeText(id="qf", content="QF1", entity_type="VLM_TEXT", layer="VLM", source="vlm", component_type="circuit_breaker", cad_position=CadPoint(x=11, y=10)),
+            NativeText(id="title", content="10kV 配电一次图", entity_type="VLM_TEXT", layer="VLM", source="vlm", component_type=None, cad_position=CadPoint(x=12, y=10)),
+        ]
+
+        components, retained = associate_component_texts([component], texts)
+
+        self.assertEqual(components[0].reference, "QF1")
+        self.assertEqual(components[0].evidence.text_ids, ["qf"])
+        self.assertEqual(retained, [texts[0]])
+        self.assertEqual(retained[0].component_id, "cmp_1")
 
     def test_visual_pipeline_falls_back_to_obb_after_vlm_failure(self):
         class ConfiguredObb:

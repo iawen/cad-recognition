@@ -22,6 +22,8 @@ class NativeText(BaseModel):
     confidence: float = 1.0
     frame_index: int | None = None
     detection_bbox_px: list[float] | None = None
+    component_type: str | None = None
+    component_id: str | None = None
 
 
 class ComponentEvidence(BaseModel):

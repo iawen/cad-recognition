@@ -37,6 +37,7 @@ def assemble_vector_result(
             "entity_count": sum(parsed.entity_types.values()),
             "component_count": len(parsed.components),
             "text_count": len(parsed.texts),
+            "component_linked_text_count": sum(text.component_id is not None for text in parsed.texts),
             "known_block_component_count": sum(component.source == "block" for component in parsed.components),
             "vision_component_count": sum(component.source == "vision" for component in parsed.components),
             "frame_count": len({item.frame_index for item in [*parsed.components, *parsed.texts] if item.frame_index is not None}),

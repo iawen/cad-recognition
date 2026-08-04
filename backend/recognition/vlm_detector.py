@@ -45,6 +45,7 @@ class VlmTextDetection:
     center_y: float
     width: float
     height: float
+    component_type: str
 
 
 class VlmDetector:
@@ -250,12 +251,17 @@ class VlmDetector:
             "use 0<=xmin<xmax and 0<=ymin<ymax. Return an empty components array if no allowed symbol is visible."
         )
 
-    @staticmethod
-    def _text_prompt() -> str:
+    def _text_prompt(self) -> str:
+        evidence_instruction = visual_evidence_prompt(self.component_evidence)
         return (
-            "Extract every clearly visible text label, Chinese or Latin, from this electrical drawing image. "
-            "Return exactly {\"texts\":[{\"content\":string,\"bbox\":[xmin,ymin,xmax,ymax],\"confidence\":number}]}. "
-            "bbox coordinates are pixels in this image. Exclude unreadable marks and duplicate overlapping text."
+            "Extract only clearly visible text that identifies or specifies one allowed electrical component: "
+            + ", ".join(SUPPORTED_COMPONENT_TYPES) + ". "
+            "Ignore titles, drawing numbers, cabinet names, notes, dimensions, revision data, wire numbers, and all text unrelated to a component. "
+            "For each returned item, component_type must identify the adjacent component that the text belongs to. "
+            "A label is evidence only: do not return it unless an adjacent matching component symbol is visible. "
+            + evidence_instruction + " "
+            "Return exactly {\"texts\":[{\"content\":string,\"component_type\":string,\"bbox\":[xmin,ymin,xmax,ymax],\"confidence\":number}]}. "
+            "bbox coordinates are pixels in this image and cover text only. Exclude unreadable marks and duplicate overlapping text."
         )
 
     @staticmethod
@@ -303,8 +309,11 @@ class VlmDetector:
             return []
         detections: list[VlmTextDetection] = []
         for item in decoded.get("texts", []):
-            value, bbox = item.get("content"), item.get("bbox")
-            if not isinstance(value, str) or not value.strip() or not isinstance(bbox, list) or len(bbox) != 4:
+            value, component_type, bbox = item.get("content"), item.get("component_type"), item.get("bbox")
+            if (
+                not isinstance(value, str) or not value.strip() or component_type not in SUPPORTED_COMPONENT_TYPES
+                or not isinstance(bbox, list) or len(bbox) != 4
+            ):
                 continue
             try:
                 xmin, ymin, xmax, ymax = (float(item) for item in bbox)
@@ -315,5 +324,8 @@ class VlmDetector:
             ymin, ymax = max(0, ymin), min(float(image_height), ymax)
             if xmin >= xmax or ymin >= ymax:
                 continue
-            detections.append(VlmTextDetection(value.strip(), confidence, (xmin + xmax) / 2, (ymin + ymax) / 2, xmax - xmin, ymax - ymin))
+            detections.append(VlmTextDetection(
+                value.strip(), confidence, (xmin + xmax) / 2, (ymin + ymax) / 2,
+                xmax - xmin, ymax - ymin, component_type,
+            ))
         return detections

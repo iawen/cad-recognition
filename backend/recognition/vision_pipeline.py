@@ -237,7 +237,7 @@ def detect_visual_texts(
                 for detection in detections:
                     global_detection = VlmTextDetection(
                         detection.content, detection.confidence, tile.x_offset + detection.center_x,
-                        tile.y_offset + detection.center_y, detection.width, detection.height,
+                        tile.y_offset + detection.center_y, detection.width, detection.height, detection.component_type,
                     )
                     if _is_duplicate_text(frame_index, global_detection, prior):
                         continue
@@ -245,7 +245,7 @@ def detect_visual_texts(
                     results.append(NativeText(
                         id=f"vlm_text_{len(results) + 1:04d}", content=global_detection.content,
                         entity_type="VLM_TEXT", layer="VLM", source="vlm", confidence=global_detection.confidence,
-                        frame_index=frame_index,
+                        frame_index=frame_index, component_type=global_detection.component_type,
                         cad_position=transform.pixel_to_cad(CadPoint(x=global_detection.center_x, y=global_detection.center_y)),
                         detection_bbox_px=[round(value, 2) for value in (
                             global_detection.center_x - global_detection.width / 2,
