@@ -124,6 +124,7 @@ def detect_visual_components(
                 "tile_count": len(tiles),
             })
             for tile in tiles:
+                time.sleep(30)
                 try:
                     detections = active_detector.detect(tile.path)
                 except RuntimeError as exc:
