@@ -63,6 +63,7 @@ export interface ExtractedText {
   fontSize?: number;
   position: { x: number; y: number; sheet: string };
   layer?: string;
+  source?: 'dxf' | 'vlm';
   confidence: number;
   boundingBox: BoundingBox;
 }
@@ -71,6 +72,16 @@ export interface ExtractedText {
 export interface SheetInfo {
   index: number;
   name: string;
+}
+
+/** 从 DXF 主图框独立渲染的高清底图 */
+export interface BaseImage {
+  index: number;
+  name: string;
+  imageUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  cadExtent: [number, number, number, number];
 }
 
 /** 识别任务（含图纸图片信息） */
@@ -89,5 +100,6 @@ export interface RecognitionTask {
   imageUrl: string;
   imageWidth: number;
   imageHeight: number;
+  baseImages?: BaseImage[];
   sheets: SheetInfo[];
 }

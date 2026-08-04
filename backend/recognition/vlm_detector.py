@@ -36,6 +36,16 @@ class VlmDetection:
     angle_deg: float
 
 
+@dataclass(frozen=True)
+class VlmTextDetection:
+    content: str
+    confidence: float
+    center_x: float
+    center_y: float
+    width: float
+    height: float
+
+
 class VlmDetector:
     """Detect electrical symbols in one image tile via a multimodal model."""
 
@@ -152,6 +162,55 @@ class VlmDetector:
         })
         return detections
 
+    def extract_texts(self, image_path: Path) -> list[VlmTextDetection]:
+        """Extract visible text and its pixel bounds from one frame-specific tile."""
+        if not self.enabled:
+            return []
+        if not self.configured:
+            raise RuntimeError("已启用 DRAWING_VLM_ENABLED，但缺少模型端点、密钥或模型名配置。")
+        image_data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        mime_type = "image/png" if image_path.suffix.casefold() == ".png" else "image/jpeg"
+        payload = {
+            "model": self.model_name,
+            "temperature": self.temperature,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": "You extract visible drawing text. Return JSON only and never guess unreadable text."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": self._text_prompt()},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}},
+                ]},
+            ],
+        }
+        if self.disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+        self.last_request_metadata = {
+            "model": self.model_identifier, "tile": image_path.name, "purpose": "text_extraction",
+            "temperature": self.temperature, "timeout_seconds": self.timeout_seconds,
+            "thinking_disabled": self.disable_thinking, "started_at_unix_ms": round(time.time() * 1000),
+        }
+        started = time.perf_counter()
+        try:
+            request = Request(
+                f"{self.base_url}/chat/completions", data=json.dumps(payload).encode("utf-8"),
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST",
+            )
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": f"http_{exc.code}"})
+            raise RuntimeError(f"VLM 文字提取请求失败，HTTP 状态码：{exc.code}。") from exc
+        except URLError as exc:
+            self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "unreachable"})
+            raise RuntimeError("VLM 文字提取服务不可达。") from exc
+        except TimeoutError as exc:
+            self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "timeout"})
+            raise RuntimeError("VLM 文字提取请求超时。") from exc
+        content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        texts = self._parse_texts(content, image_path)
+        self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "ok", "valid_text_count": len(texts)})
+        return texts
+
     def _reference_content(self) -> list[dict[str, object]]:
         if not self.use_excel_references or self.reference_limit == 0:
             return []
@@ -186,6 +245,14 @@ class VlmDetector:
         )
 
     @staticmethod
+    def _text_prompt() -> str:
+        return (
+            "Extract every clearly visible text label, Chinese or Latin, from this electrical drawing image. "
+            "Return exactly {\"texts\":[{\"content\":string,\"bbox\":[xmin,ymin,xmax,ymax],\"confidence\":number}]}. "
+            "bbox coordinates are pixels in this image. Exclude unreadable marks and duplicate overlapping text."
+        )
+
+    @staticmethod
     def _parse(content: str, image_path: Path) -> list[VlmDetection]:
         try:
             decoded = json.loads(content)
@@ -217,4 +284,30 @@ class VlmDetector:
                 label=label, confidence=confidence, center_x=(xmin + xmax) / 2, center_y=(ymin + ymax) / 2,
                 width=xmax - xmin, height=ymax - ymin, angle_deg=rotation,
             ))
+        return detections
+
+    @staticmethod
+    def _parse_texts(content: str, image_path: Path) -> list[VlmTextDetection]:
+        try:
+            decoded = json.loads(content)
+            from PIL import Image
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
+        except Exception:
+            return []
+        detections: list[VlmTextDetection] = []
+        for item in decoded.get("texts", []):
+            value, bbox = item.get("content"), item.get("bbox")
+            if not isinstance(value, str) or not value.strip() or not isinstance(bbox, list) or len(bbox) != 4:
+                continue
+            try:
+                xmin, ymin, xmax, ymax = (float(item) for item in bbox)
+                confidence = min(max(float(item.get("confidence", 0)), 0), 1)
+            except (TypeError, ValueError):
+                continue
+            xmin, xmax = max(0, xmin), min(float(image_width), xmax)
+            ymin, ymax = max(0, ymin), min(float(image_height), ymax)
+            if xmin >= xmax or ymin >= ymax:
+                continue
+            detections.append(VlmTextDetection(value.strip(), confidence, (xmin + xmax) / 2, (ymin + ymax) / 2, xmax - xmin, ymax - ymin))
         return detections

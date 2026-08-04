@@ -23,14 +23,14 @@ def _run_analysis(run_id: str, drawing_path: Path) -> None:
     try:
         update_run(run_id, status="running", phase="preflight", progress=10, message="正在校验图纸与转换器配置。")
         update_run(run_id, status="running", phase="vector_parse", progress=45, message="正在解析 DXF 实体、Block 和原生文字。")
-        RENDER_ROOT.mkdir(parents=True, exist_ok=True)
-        render_path = RENDER_ROOT / f"{run_id}.png"
-        result = analyze_drawing(drawing_path, render_output_path=render_path).model_dump()
+        render_dir = RENDER_ROOT / run_id
+        result = analyze_drawing(drawing_path, render_output_dir=render_dir).model_dump()
         update_run(run_id, status="running", phase="fusion", progress=80, message="正在关联文字并组装审计证据。")
         update_run(run_id, status="succeeded", phase="done", progress=100, message="图纸识别完成。", result=result)
         logger.info(
-            "Analysis succeeded run_id=%s components=%s texts=%s render_path=%s",
-            run_id, result["summary"]["component_count"], result["summary"]["text_count"], render_path,
+            "Analysis succeeded run_id=%s components=%s texts=%s base_map_count=%s",
+            run_id, result["summary"]["component_count"], result["summary"]["text_count"],
+            len(result.get("drawing", {}).get("base_images", [])),
         )
     except Exception as exc:
         logger.exception("Analysis failed run_id=%s drawing_path=%s error=%s", run_id, drawing_path, exc)

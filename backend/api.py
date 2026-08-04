@@ -17,11 +17,12 @@ from domain.models import CadPoint
 from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from ingest.file_validation import SUPPORTED_EXTENSIONS
+from ingest.dwg_converter import use_realdwg
 from recognition.component_catalog import CATALOG_SOURCE, catalog_capabilities
 from recognition.reference_icons import reference_icon_summary
 from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
 from runtime.worker import submit_analysis
-from service import analyze_drawing
+from service import analyze_drawing, render_dxf_base_maps
 from tools.logger import logger
 
 
@@ -77,6 +78,25 @@ def _ensure_run_render(run: dict) -> Path | None:
     return render_path if render_path.is_file() else None
 
 
+def _ensure_base_images(run: dict) -> list[dict]:
+    """Create frame-specific PNGs for completed legacy tasks when first viewed."""
+    drawing = (run.get("result") or {}).get("drawing", {})
+    base_images = drawing.get("base_images", [])
+    render_dir = RENDER_ROOT / run["id"]
+    if base_images and all((render_dir / item["filename"]).is_file() for item in base_images):
+        return base_images
+    if run["status"] != "succeeded":
+        return []
+    source_path = get_run_path(run["id"])
+    if source_path is None or not source_path.is_file():
+        return []
+    try:
+        return render_dxf_base_maps(source_path, render_dir)
+    except Exception:
+        logger.exception("Task base-map rendering failed run_id=%s", run["id"])
+        return []
+
+
 def _render_dimensions(render_path: Path | None) -> tuple[int, int]:
     """Read the rendered PNG dimensions for clients that project annotations."""
     if render_path is None:
@@ -94,10 +114,17 @@ def _render_dimensions(render_path: Path | None) -> tuple[int, int]:
 def _frontend_task(run: dict) -> dict[str, object]:
     completed_at = run["updated_at"] if run["status"] in {"succeeded", "failed"} else None
     size = get_run_path(run["id"])
-    render_path = _ensure_run_render(run)
+    has_persisted_base_images = bool((run.get("result") or {}).get("drawing", {}).get("base_images"))
+    base_images = _ensure_base_images(run)
+    # Older completed tasks only recorded the legacy whole-drawing PNG. Keep it
+    # available while adding regional images lazily; new tasks use region maps.
+    render_path = _ensure_run_render(run) if not has_persisted_base_images else None
     image_width, image_height = _render_dimensions(render_path)
     limitations = (run.get("result") or {}).get("audit", {}).get("limitations", [])
-    visual_warning = next((item for item in limitations if item.startswith("视觉识别未执行：")), None)
+    visual_warning = next(
+        (item for item in limitations if item.startswith(("视觉识别未执行：", "VLM 文字提取未执行："))),
+        None,
+    )
     return {
         "taskId": run["id"],
         "fileName": run["filename"],
@@ -111,29 +138,59 @@ def _frontend_task(run: dict) -> dict[str, object]:
         "imageUrl": f"/api/recognition/{run['id']}/drawing" if render_path else "",
         "imageWidth": image_width,
         "imageHeight": image_height,
-        "sheets": [{"index": 0, "name": "模型空间"}],
+        "baseImages": [{
+            "index": item["index"], "name": item["name"],
+            "imageUrl": f"/api/recognition/{run['id']}/drawing/{item['filename']}",
+            "imageWidth": item["image_width"], "imageHeight": item["image_height"],
+            "cadExtent": item["cad_extent"],
+        } for item in base_images],
+        "sheets": ([{"index": item["index"], "name": item["name"]} for item in base_images]
+                   or [{"index": 0, "name": "模型空间"}]),
     }
 
 
+def _base_image_for_point(base_images: list[dict], point: dict[str, float]) -> dict | None:
+    """Return the persisted drawing frame that contains a CAD point."""
+    for image in base_images:
+        min_x, min_y, max_x, max_y = image["cad_extent"]
+        if min_x <= point["x"] <= max_x and min_y <= point["y"] <= max_y:
+            return image
+    return None
+
+
+def _base_image_for_record(base_images: list[dict], record: dict, point: dict[str, float]) -> dict | None:
+    """Prefer persisted frame membership; retain coordinate fallback for legacy tasks."""
+    frame_index = record.get("frame_index")
+    if isinstance(frame_index, int):
+        return next((image for image in base_images if image["index"] == frame_index), None)
+    return _base_image_for_point(base_images, point)
+
+
 def _normalized_boxes(result: dict) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
-    """Project CAD centers into stable normalized UI boxes for the P1 result."""
+    """Project CAD centers into their frame-specific normalized UI boxes."""
     points = [component["cad_center"] for component in result.get("components", [])]
     points.extend(text["cad_position"] for text in result.get("texts", []) if text.get("cad_position"))
     if not points:
         return {}, {}
     min_x, max_x = min(point["x"] for point in points), max(point["x"] for point in points)
     min_y, max_y = min(point["y"] for point in points), max(point["y"] for point in points)
-    span_x, span_y = max(max_x - min_x, 1.0), max(max_y - min_y, 1.0)
+    base_images = result.get("drawing", {}).get("base_images", [])
 
-    def box(point: dict[str, float], width: float, height: float) -> dict[str, float]:
-        x = min(max((point["x"] - min_x) / span_x - width / 2, 0.0), 1.0 - width)
+    def box(record: dict, point: dict[str, float], width: float, height: float) -> dict[str, float]:
+        frame = _base_image_for_record(base_images, record, point)
+        if frame is not None:
+            frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame["cad_extent"]
+        else:
+            frame_min_x, frame_min_y, frame_max_x, frame_max_y = min_x, min_y, max_x, max_y
+        span_x, span_y = max(frame_max_x - frame_min_x, 1.0), max(frame_max_y - frame_min_y, 1.0)
+        x = min(max((point["x"] - frame_min_x) / span_x - width / 2, 0.0), 1.0 - width)
         # DXF Y grows upward whereas the canvas Y grows downward.
-        y = min(max((max_y - point["y"]) / span_y - height / 2, 0.0), 1.0 - height)
+        y = min(max((frame_max_y - point["y"]) / span_y - height / 2, 0.0), 1.0 - height)
         return {"x": round(x, 6), "y": round(y, 6), "width": width, "height": height}
 
-    component_boxes = {component["id"]: box(component["cad_center"], 0.035, 0.035) for component in result.get("components", [])}
+    component_boxes = {component["id"]: box(component, component["cad_center"], 0.035, 0.035) for component in result.get("components", [])}
     text_boxes = {
-        text["id"]: box(text["cad_position"], min(0.35, max(0.06, len(text["content"]) * 0.006)), 0.024)
+        text["id"]: box(text, text["cad_position"], min(0.35, max(0.06, len(text["content"]) * 0.006)), 0.024)
         for text in result.get("texts", []) if text.get("cad_position")
     }
     return component_boxes, text_boxes
@@ -174,8 +231,9 @@ async def get_drawing_recognition_capabilities():
     """Describe the current P1 baseline so consumers do not infer unsupported features."""
     return {
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
+        "dwg_parser": "realdwg_sidecar" if use_realdwg() else "oda_file_converter",
         "implemented": ["p0_batch_audit", "dxf_audit", "block_component_recognition", "native_text_extraction", "text_component_linking", "persistent_runs", "sse_progress"],
-        "optional": ["png_rendering", "overlapping_tiling", "vlm_detection_when_enabled", "obb_detection_when_model_configured"],
+        "optional": ["frame_base_map_rendering", "overlapping_tiling", "frame_vlm_component_detection_when_enabled", "frame_vlm_text_extraction_when_enabled", "obb_detection_when_model_configured"],
         "not_implemented": ["paddleocr", "wire_tracing", "netlist", "human_review_workspace"],
         "component_catalog_source": CATALOG_SOURCE,
         "supported_components": catalog_capabilities(),
@@ -249,11 +307,25 @@ async def get_frontend_drawing(task_id: str):
     return FileResponse(render_path, media_type="image/png", filename=f"{task_id}.png")
 
 
+@router.get("/api/recognition/{task_id}/drawing/{image_name}")
+async def get_frontend_base_map(task_id: str, image_name: str):
+    """Serve a persisted high-resolution drawing-frame base map."""
+    if get_run(task_id) is None:
+        raise HTTPException(404, "识别任务不存在。")
+    if Path(image_name).name != image_name or not image_name.endswith(".png"):
+        raise HTTPException(404, "图纸底图不存在。")
+    image_path = RENDER_ROOT / task_id / image_name
+    if not image_path.is_file():
+        raise HTTPException(404, "当前任务尚未生成图框底图。")
+    return FileResponse(image_path, media_type="image/png", filename=image_name)
+
+
 @router.get("/api/recognition/{task_id}/symbols")
 async def get_frontend_symbols(task_id: str):
     logger.info("Frontend symbols requested run_id=%s", task_id)
     result = _completed_result(task_id)
     component_boxes, _ = _normalized_boxes(result)
+    base_images = result.get("drawing", {}).get("base_images", [])
     symbols = []
     for component in result.get("components", []):
         attributes = [{"key": key, "value": value} for key, value in component["evidence"].get("attributes", {}).items()]
@@ -265,7 +337,7 @@ async def get_frontend_symbols(task_id: str):
         symbols.append({
             "id": component["id"], "name": name, "model": component.get("value"),
             "category": catalog_category or component["type"], "quantity": 1, "attributes": attributes,
-            "position": {"x": component["cad_center"]["x"], "y": component["cad_center"]["y"], "sheet": "页1"},
+            "position": {"x": component["cad_center"]["x"], "y": component["cad_center"]["y"], "sheet": f"页{(_base_image_for_record(base_images, component, component['cad_center']) or {'index': 0})['index'] + 1}"},
             "confidence": component["confidence"], "boundingBox": component_boxes.get(component["id"], {"x": 0, "y": 0, "width": 0.035, "height": 0.035}),
             "color": _COMPONENT_COLORS.get(component["type"], "#8C8C8C"),
         })
@@ -286,6 +358,7 @@ async def get_frontend_texts(task_id: str):
     logger.info("Frontend texts requested run_id=%s", task_id)
     result = _completed_result(task_id)
     _, text_boxes = _normalized_boxes(result)
+    base_images = result.get("drawing", {}).get("base_images", [])
     texts = []
     for text in result.get("texts", []):
         if text.get("cad_position") is None:
@@ -293,8 +366,9 @@ async def get_frontend_texts(task_id: str):
         content = text["content"]
         text_type = "title" if len(content) < 80 and ("图" in content or "TITLE" in text["layer"].upper()) else "label"
         texts.append({
-            "id": text["id"], "content": content, "type": text_type, "layer": text["layer"], "confidence": 1.0,
-            "position": {"x": text["cad_position"]["x"], "y": text["cad_position"]["y"], "sheet": "页1"},
+            "id": text["id"], "content": content, "type": text_type, "layer": text["layer"],
+            "source": text.get("source", "dxf"), "confidence": text.get("confidence", 1.0),
+            "position": {"x": text["cad_position"]["x"], "y": text["cad_position"]["y"], "sheet": f"页{(_base_image_for_record(base_images, text, text['cad_position']) or {'index': 0})['index'] + 1}"},
             "boundingBox": text_boxes.get(text["id"], {"x": 0, "y": 0, "width": 0.06, "height": 0.024}),
         })
     logger.info("Frontend texts returned run_id=%s count=%s", task_id, len(texts))

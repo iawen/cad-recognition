@@ -26,7 +26,8 @@ from recognition.component_catalog import COMPONENT_CATALOG
 from recognition.reference_icons import extract_excel_reference_icons, reference_icon_summary
 from runtime.repository import create_run, update_run
 from runtime.worker import _run_analysis
-from service import analyze_drawing
+from service import analyze_drawing, render_dxf_base_maps
+from ingest.dwg_converter import convert_dwg_to_dxf
 from tools.vlm_capacitor_probe import _prepare_crop
 
 
@@ -36,6 +37,9 @@ class P0ToP2RegressionTests(unittest.TestCase):
         visual_detector = patch("service.detect_visual_components", return_value=[])
         visual_detector.start()
         self.addCleanup(visual_detector.stop)
+        visual_text_detector = patch("service.detect_visual_texts", return_value=[])
+        visual_text_detector.start()
+        self.addCleanup(visual_text_detector.stop)
 
     def _create_dxf(self, root: Path) -> Path:
         path = root / "electrical.dxf"
@@ -83,6 +87,22 @@ class P0ToP2RegressionTests(unittest.TestCase):
             tiles = create_tiles(image, root / "tiles", tile_size=256, overlap=32)
         self.assertTrue(tiles)
 
+    def test_realdwg_environment_switch_selects_sidecar(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            drawing = Path(temp_dir) / "drawing.dwg"
+            drawing.write_bytes(b"placeholder")
+            expected_dxf = Path(temp_dir) / "drawing.dxf"
+            sidecar_temp = Mock()
+            with (
+                patch.dict("os.environ", {"DRAWING_USE_REALDWG": "true"}),
+                patch("ingest.dwg_converter.convert_dwg_with_realdwg", return_value=(expected_dxf, sidecar_temp)) as sidecar,
+            ):
+                actual_dxf, actual_temp = convert_dwg_to_dxf(drawing)
+
+        sidecar.assert_called_once_with(drawing)
+        self.assertEqual(actual_dxf, expected_dxf)
+        self.assertIs(actual_temp, sidecar_temp)
+
     def test_detects_large_rectangular_drawing_regions(self):
         document = ezdxf.new("R2018")
         layout = document.modelspace()
@@ -99,6 +119,23 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual((regions[0].min_x, regions[0].min_y), (0.0, 60.0))
         self.assertEqual((regions[-1].min_x, regions[-1].min_y), (100.0, 0.0))
 
+    def test_detects_frame_assembled_from_polyline_segments(self):
+        document = ezdxf.new("R2018")
+        layout = document.modelspace()
+        for first, second in (
+            ((0, 0), (50, 0)), ((50, 0), (100, 0)),
+            ((100, 0), (100, 25)), ((100, 25), (100, 50)),
+            ((100, 50), (50, 50)), ((50, 50), (0, 50)),
+            ((0, 50), (0, 25)), ((0, 25), (0, 0)),
+        ):
+            layout.add_lwpolyline([first, second])
+
+        regions = detect_drawing_regions(layout)
+
+        self.assertEqual(len(regions), 1)
+        self.assertEqual((regions[0].min_x, regions[0].min_y), (0.0, 0.0))
+        self.assertEqual((regions[0].max_x, regions[0].max_y), (100.0, 50.0))
+
     def test_renders_detected_region_at_high_dpi(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -107,6 +144,20 @@ class P0ToP2RegressionTests(unittest.TestCase):
             image = render_dxf_region_to_png(drawing, root / "region.png", region, dpi=72, max_size_inches=2)
             self.assertTrue(image.exists())
             self.assertGreater(image.stat().st_size, 0)
+
+    def test_persists_one_base_map_for_each_detected_frame(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            drawing = self._create_dxf(root)
+            base_images = render_dxf_base_maps(drawing, root / "base-maps", dpi=72)
+
+            image_path = root / "base-maps" / base_images[0]["filename"]
+            self.assertTrue(image_path.is_file())
+            self.assertGreater(image_path.stat().st_size, 0)
+        self.assertEqual(len(base_images), 1)
+        self.assertEqual(base_images[0]["filename"], "modelspace.png")
+        self.assertGreater(base_images[0]["image_width"], 0)
+        self.assertGreater(base_images[0]["image_height"], 0)
 
     def test_frontend_result_endpoints(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -152,6 +203,20 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual(len(detections), 1)
         self.assertEqual(detections[0].label, "circuit_breaker")
         self.assertEqual(detections[0].center_x, 30)
+
+    def test_vlm_text_schema_parser_rejects_invalid_entries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "frame.png"
+            from PIL import Image
+            Image.new("RGB", (100, 80), "white").save(image_path)
+            texts = VlmDetector._parse_texts(
+                '{"texts":[{"content":"QF1","bbox":[10,20,50,40],"confidence":0.9},'
+                '{"content":"","bbox":[0,0,1,1],"confidence":1}]}',
+                image_path,
+            )
+        self.assertEqual(len(texts), 1)
+        self.assertEqual(texts[0].content, "QF1")
+        self.assertEqual(texts[0].center_x, 30)
 
     def test_vlm_probe_prepares_contrast_enhanced_upscaled_crop(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -15,9 +15,13 @@ class CadPoint(BaseModel):
 class NativeText(BaseModel):
     id: str
     content: str
-    entity_type: Literal["TEXT", "MTEXT"]
+    entity_type: Literal["TEXT", "MTEXT", "VLM_TEXT"]
     layer: str
     cad_position: CadPoint | None = None
+    source: Literal["dxf", "vlm"] = "dxf"
+    confidence: float = 1.0
+    frame_index: int | None = None
+    detection_bbox_px: list[float] | None = None
 
 
 class ComponentEvidence(BaseModel):
@@ -43,6 +47,7 @@ class ComponentCandidate(BaseModel):
     source: Literal["block", "vision", "fusion"] = "block"
     confidence: float
     review_status: Literal["approved", "pending", "rejected"] = "approved"
+    frame_index: int | None = None
     evidence: ComponentEvidence
 
 

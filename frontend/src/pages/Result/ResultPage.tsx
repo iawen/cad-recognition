@@ -66,6 +66,7 @@ export default function ResultPage() {
     () => texts.filter((t) => t.position.sheet === sheetLabel),
     [texts, sheetLabel]
   );
+  const selectedBaseImage = task?.baseImages?.find((image) => image.index === selectedSheetIndex);
 
   if (loading) {
     return (
@@ -126,7 +127,7 @@ export default function ResultPage() {
         <Alert
           type="warning"
           showIcon
-          message="视觉元件识别未完成"
+          message="视觉识别未完成"
           description={task.warning}
           style={{ margin: '12px 16px 0' }}
         />
@@ -150,9 +151,9 @@ export default function ResultPage() {
             tables={filteredTables}
             texts={filteredTexts}
             sheetIndex={selectedSheetIndex}
-            imageUrl={task.imageUrl}
-            imageWidth={task.imageWidth}
-            imageHeight={task.imageHeight}
+            imageUrl={selectedBaseImage?.imageUrl || task.imageUrl}
+            imageWidth={selectedBaseImage?.imageWidth || task.imageWidth}
+            imageHeight={selectedBaseImage?.imageHeight || task.imageHeight}
           />
         </div>
       </div>

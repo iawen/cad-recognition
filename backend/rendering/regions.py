@@ -53,11 +53,94 @@ def _rectangle_from_polyline(entity: Any) -> tuple[float, float, float, float] |
     return None
 
 
+def _merged_axis_segments(
+    layout: Any,
+    *,
+    tolerance: float,
+) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
+    """Join touching horizontal and vertical LWPOLYLINE edges.
+
+    Some CAD exporters write a drawing frame as several two-point polylines
+    instead of one closed rectangle. The output tuples are ``(coordinate,
+    start, end)`` for horizontal and vertical lines respectively.
+    """
+    horizontal: list[tuple[float, float, float]] = []
+    vertical: list[tuple[float, float, float]] = []
+    for entity in layout:
+        if entity.dxftype() != "LWPOLYLINE":
+            continue
+        points = [(float(point[0]), float(point[1])) for point in entity.get_points("xy")]
+        if len(points) < 2:
+            continue
+        pairs = list(zip(points, points[1:]))
+        if entity.closed:
+            pairs.append((points[-1], points[0]))
+        for first, second in pairs:
+            delta_x, delta_y = second[0] - first[0], second[1] - first[1]
+            if abs(delta_y) <= tolerance and abs(delta_x) > tolerance:
+                horizontal.append(((first[1] + second[1]) / 2, min(first[0], second[0]), max(first[0], second[0])))
+            elif abs(delta_x) <= tolerance and abs(delta_y) > tolerance:
+                vertical.append(((first[0] + second[0]) / 2, min(first[1], second[1]), max(first[1], second[1])))
+
+    def merge(segments: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
+        merged: list[tuple[float, float, float]] = []
+        for coordinate, start, end in sorted(segments):
+            if merged:
+                previous_coordinate, previous_start, previous_end = merged[-1]
+                if abs(coordinate - previous_coordinate) <= tolerance and start <= previous_end + tolerance:
+                    merged[-1] = (previous_coordinate, previous_start, max(previous_end, end))
+                    continue
+            merged.append((coordinate, start, end))
+        return merged
+
+    return merge(horizontal), merge(vertical)
+
+
+def _rectangles_from_segmented_polylines(
+    layout: Any,
+    *,
+    min_width: float,
+    min_height: float,
+    tolerance: float,
+) -> list[tuple[float, float, float, float]]:
+    """Find large rectangles whose four sides are connected polyline segments."""
+    horizontal, vertical = _merged_axis_segments(layout, tolerance=tolerance)
+    long_horizontal = [item for item in horizontal if item[2] - item[1] >= min_width]
+    long_vertical = [item for item in vertical if item[2] - item[1] >= min_height]
+    rectangles: list[tuple[float, float, float, float]] = []
+    span_groups: list[list[tuple[float, float, float]]] = []
+    for segment in sorted(long_horizontal, key=lambda item: (item[1], item[2], item[0])):
+        if span_groups:
+            min_x, max_x = span_groups[-1][0][1], span_groups[-1][0][2]
+            if abs(segment[1] - min_x) <= tolerance and abs(segment[2] - max_x) <= tolerance:
+                span_groups[-1].append(segment)
+                continue
+        span_groups.append([segment])
+    for group in span_groups:
+        first, second = min(group, key=lambda item: item[0]), max(group, key=lambda item: item[0])
+        min_y, max_y = first[0], second[0]
+        if max_y - min_y < min_height:
+            continue
+        min_x, max_x = first[1], first[2]
+        has_left_side = any(
+            abs(coordinate - min_x) <= tolerance and start <= min_y + tolerance and end >= max_y - tolerance
+            for coordinate, start, end in long_vertical
+        )
+        has_right_side = any(
+            abs(coordinate - max_x) <= tolerance and start <= min_y + tolerance and end >= max_y - tolerance
+            for coordinate, start, end in long_vertical
+        )
+        if has_left_side and has_right_side:
+            rectangles.append((min_x, min_y, max_x, max_y))
+    return rectangles
+
+
 def detect_drawing_regions(layout: Any, *, max_regions: int = 8) -> list[DrawingRegion]:
     """Return large non-overlapping rectangular frames, ordered top-left to bottom-right.
 
-    Only explicit, closed, axis-aligned LWPOLYLINE frames are selected. When a
-    drawing has no such frames, the caller must fall back to the full modelspace.
+    Prefer explicit closed LWPOLYLINE frames, then recover frames assembled from
+    connected axis-aligned LWPOLYLINE segments. When a drawing has neither, the
+    caller must fall back to the full modelspace.
     """
     from ezdxf import bbox
 
@@ -68,6 +151,7 @@ def detect_drawing_regions(layout: Any, *, max_regions: int = 8) -> list[Drawing
         return []
     min_width, min_height = drawing_width * 0.18, drawing_height * 0.18
     min_area = drawing_width * drawing_height * 0.04
+    tolerance = max(drawing_width, drawing_height, 1.0) * 1e-6
     candidates: list[DrawingRegion] = []
     for entity in layout:
         rectangle = _rectangle_from_polyline(entity)
@@ -76,6 +160,12 @@ def detect_drawing_regions(layout: Any, *, max_regions: int = 8) -> list[Drawing
         min_x, min_y, max_x, max_y = rectangle
         region = DrawingRegion("", min_x, min_y, max_x, max_y)
         if region.width >= min_width and region.height >= min_height and region.area >= min_area:
+            candidates.append(region)
+    for min_x, min_y, max_x, max_y in _rectangles_from_segmented_polylines(
+        layout, min_width=min_width, min_height=min_height, tolerance=tolerance,
+    ):
+        region = DrawingRegion("", min_x, min_y, max_x, max_y)
+        if region.area >= min_area:
             candidates.append(region)
 
     selected: list[DrawingRegion] = []

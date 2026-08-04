@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from cad.coordinates import CoordinateTransform
-from domain.models import CadPoint, ComponentCandidate, ComponentEvidence
+from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText
 from recognition.component_catalog import get_component_definition, resolve_component_type
 from recognition.obb_detector import ObbDetector
-from recognition.vlm_detector import VlmDetector
+from recognition.vlm_detector import VlmDetector, VlmTextDetection
 from rendering.dxf_renderer import render_dxf_region_to_png
 from rendering.regions import DrawingRegion, detect_drawing_regions
 from rendering.tiling import create_tiles
@@ -111,7 +111,7 @@ def detect_visual_components(
         started = time.perf_counter()
         raw_detection_count = 0
         vision_dpi = max(150, int(os.getenv("DRAWING_VISION_DPI", "450")))
-        for region in regions:
+        for frame_index, region in enumerate(regions):
             rendered = render_dxf_region_to_png(dxf_path, root / f"{region.name}.png", region, dpi=vision_dpi)
             with Image.open(rendered) as image:
                 transform = _region_transform(region, image.width, image.height)
@@ -163,6 +163,7 @@ def detect_visual_components(
                         id=f"vision_{len(candidates) + 1:04d}", type=component_type,
                         cad_center=transform.pixel_to_cad(global_center), rotation_deg=detection.angle_deg,
                         source="vision", confidence=detection.confidence, review_status="pending",
+                        frame_index=frame_index,
                         evidence=ComponentEvidence(
                             block_name="", layer="", detection_model=active_detector.model_identifier,
                             catalog_name=definition.display_name if definition else None,
@@ -184,3 +185,73 @@ def detect_visual_components(
         })
         result = [candidate for _, candidate, _ in candidates]
         return (result, audit) if include_audit else result
+
+
+def _is_duplicate_text(
+    frame_index: int,
+    detection: VlmTextDetection,
+    prior: list[tuple[int, VlmTextDetection]],
+) -> bool:
+    return any(
+        prior_frame == frame_index and prior_detection.content == detection.content
+        and abs(prior_detection.center_x - detection.center_x) <= 12
+        and abs(prior_detection.center_y - detection.center_y) <= 12
+        for prior_frame, prior_detection in prior
+    )
+
+
+def detect_visual_texts(
+    dxf_path: Path,
+    *,
+    detector: VlmDetector | None = None,
+    include_audit: bool = False,
+) -> list[NativeText] | tuple[list[NativeText], dict[str, Any]]:
+    """Use the VLM to extract text from each DXF frame and map it back to CAD."""
+    active_detector = detector or VlmDetector()
+    audit: dict[str, Any] = {"enabled": active_detector.enabled, "detector": active_detector.model_identifier, "requests": []}
+    if not active_detector.enabled:
+        return ([], audit) if include_audit else []
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("缺少 Pillow，无法运行 VLM 文字提取。") from exc
+    with tempfile.TemporaryDirectory(prefix="drawing-vlm-text-") as temp_dir:
+        root = Path(temp_dir)
+        results: list[NativeText] = []
+        prior: list[tuple[int, VlmTextDetection]] = []
+        vision_dpi = max(150, int(os.getenv("DRAWING_VISION_DPI", "450")))
+        for frame_index, region in enumerate(_drawing_regions(dxf_path)):
+            rendered = render_dxf_region_to_png(dxf_path, root / f"{region.name}.png", region, dpi=vision_dpi)
+            with Image.open(rendered) as image:
+                transform = _region_transform(region, image.width, image.height)
+            tiles = create_tiles(rendered, root / region.name / "text-tiles")
+            for tile in tiles:
+                try:
+                    detections = active_detector.extract_texts(tile.path)
+                except RuntimeError as exc:
+                    audit.update({"failed_tile": tile.path.name, "failure": str(exc)})
+                    raise VisualDetectionError(str(exc), audit) from exc
+                if active_detector.last_request_metadata:
+                    audit["requests"].append(dict(active_detector.last_request_metadata))
+                for detection in detections:
+                    global_detection = VlmTextDetection(
+                        detection.content, detection.confidence, tile.x_offset + detection.center_x,
+                        tile.y_offset + detection.center_y, detection.width, detection.height,
+                    )
+                    if _is_duplicate_text(frame_index, global_detection, prior):
+                        continue
+                    prior.append((frame_index, global_detection))
+                    results.append(NativeText(
+                        id=f"vlm_text_{len(results) + 1:04d}", content=global_detection.content,
+                        entity_type="VLM_TEXT", layer="VLM", source="vlm", confidence=global_detection.confidence,
+                        frame_index=frame_index,
+                        cad_position=transform.pixel_to_cad(CadPoint(x=global_detection.center_x, y=global_detection.center_y)),
+                        detection_bbox_px=[round(value, 2) for value in (
+                            global_detection.center_x - global_detection.width / 2,
+                            global_detection.center_y - global_detection.height / 2,
+                            global_detection.center_x + global_detection.width / 2,
+                            global_detection.center_y + global_detection.height / 2,
+                        )],
+                    ))
+        audit.update({"frame_count": len(_drawing_regions(dxf_path)), "text_count": len(results), "vision_dpi": vision_dpi})
+        return (results, audit) if include_audit else results

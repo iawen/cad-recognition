@@ -39,6 +39,8 @@ def assemble_vector_result(
             "text_count": len(parsed.texts),
             "known_block_component_count": sum(component.source == "block" for component in parsed.components),
             "vision_component_count": sum(component.source == "vision" for component in parsed.components),
+            "frame_count": len({item.frame_index for item in [*parsed.components, *parsed.texts] if item.frame_index is not None}),
+            "vlm_text_count": sum(text.source == "vlm" for text in parsed.texts),
             "unknown_block_count": sum(parsed.unknown_blocks.values()),
         },
         components=parsed.components,

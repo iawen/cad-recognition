@@ -134,6 +134,11 @@ export default function TextTab({ texts }: TextTabProps) {
                     <Tag color={TEXT_TYPE_COLORS[item.type]} style={{ margin: 0, fontSize: 10 }}>
                       {TEXT_TYPE_LABELS[item.type]}
                     </Tag>
+                    {item.source === 'vlm' && (
+                      <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>
+                        VLM
+                      </Tag>
+                    )}
                     <Tooltip title={`置信度: ${(item.confidence * 100).toFixed(0)}%`}>
                       <Tag
                         color={
