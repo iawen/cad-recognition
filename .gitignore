@@ -1,2 +1,2 @@
 # Runtime uploads, SQLite task state, model weights, and render artefacts are not source assets.
-data/
+# data/

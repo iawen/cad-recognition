@@ -123,8 +123,9 @@ def detect_visual_components(
                 "image_size": region_size,
                 "tile_count": len(tiles),
             })
-            for tile in tiles:
+            for i, tile in enumerate(tiles):
                 time.sleep(30)
+                print(f"vllm {i+1} / {len(tiles)}")
                 try:
                     detections = active_detector.detect(tile.path)
                 except RuntimeError as exc:
