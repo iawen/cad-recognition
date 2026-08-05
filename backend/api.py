@@ -115,7 +115,8 @@ def _frontend_task(run: dict) -> dict[str, object]:
     completed_at = run["updated_at"] if run["status"] in {"succeeded", "failed"} else None
     size = get_run_path(run["id"])
     has_persisted_base_images = bool((run.get("result") or {}).get("drawing", {}).get("base_images"))
-    base_images = _ensure_base_images(run)
+    streamed_base_images = (run.get("work") or {}).get("base_images", [])
+    base_images = _ensure_base_images(run) or streamed_base_images
     # Older completed tasks only recorded the legacy whole-drawing PNG. Keep it
     # available while adding regional images lazily; new tasks use region maps.
     render_path = _ensure_run_render(run) if not has_persisted_base_images else None

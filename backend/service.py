@@ -109,6 +109,16 @@ def analyze_drawing(
             )
         if render_output_path is not None:
             render_dxf_to_png(dxf_path, render_output_path)
+        # Produce the frame-specific base maps before frame recognition so the
+        # streamed result page can show each detected frame while recognition
+        # continues. The final result reuses this manifest instead of rendering
+        # the same frames again.
+        base_images: list[dict[str, object]] = []
+        if render_output_dir is not None:
+            logger.info("Drawing analysis progressive base-map rendering started source=%s output_dir=%s", dxf_path, render_output_dir)
+            base_images = render_dxf_base_maps(
+                dxf_path, render_output_dir, regions=regions, progress_callback=progress_callback,
+            )
         # Parse the DXF once, then assign every native Block/text record to its
         # owning frame. Each subsequent recognition decision is frame-local.
         for component in parsed.components:
@@ -229,11 +239,6 @@ def analyze_drawing(
         ]
         if render_output_path is not None:
             result.drawing["render_path"] = render_output_path.name
-        if render_output_dir is not None:
-            logger.info("Drawing analysis base-map rendering started source=%s output_dir=%s", dxf_path, render_output_dir)
-            base_images = render_dxf_base_maps(dxf_path, render_output_dir, progress_callback=progress_callback)
-        else:
-            base_images = []
         if base_images:
             result.drawing["base_images"] = base_images
         logger.info(
@@ -252,6 +257,7 @@ def render_dxf_base_maps(
     *,
     dpi: int = 450,
     progress_callback: ProgressCallback | None = None,
+    regions: list[DrawingRegion] | None = None,
 ) -> list[dict[str, object]]:
     """Persist one high-resolution PNG for every detected modelspace drawing frame."""
     import ezdxf
@@ -260,23 +266,17 @@ def render_dxf_base_maps(
 
     document = ezdxf.readfile(dxf_path)
     layout = document.modelspace()
-    regions = detect_drawing_regions(layout)
-    if not regions:
+    detected_regions = regions or detect_drawing_regions(layout)
+    if not detected_regions:
         extent = bbox.extents(layout)
-        regions = [DrawingRegion(
+        detected_regions = [DrawingRegion(
             "modelspace", float(extent.extmin.x), float(extent.extmin.y),
             float(extent.extmax.x), float(extent.extmax.y),
         )]
 
     output_dir.mkdir(parents=True, exist_ok=True)
     base_images: list[dict[str, object]] = []
-    for index, region in enumerate(regions):
-        if progress_callback:
-            progress_callback(
-                "frame_render", 89 + round(3 * index / max(len(regions), 1)),
-                f"正在保存主图框底图 {index + 1}/{len(regions)}。",
-                {"kind": "frame_render", "frame_index": index, "frame_total": len(regions), "frame_name": region.name},
-            )
+    for index, region in enumerate(detected_regions):
         image_path = output_dir / f"{region.name}.png"
         render_dxf_region_to_png(dxf_path, image_path, region, dpi=dpi, max_size_inches=10.0)
         with Image.open(image_path) as image:
@@ -289,5 +289,14 @@ def render_dxf_base_maps(
             "image_height": height,
             "cad_extent": [region.min_x, region.min_y, region.max_x, region.max_y],
         })
+        if progress_callback:
+            progress_callback(
+                "frame_render", 36 + round(3 * (index + 1) / max(len(detected_regions), 1)),
+                f"已生成主图框底图 {index + 1}/{len(detected_regions)}。",
+                {
+                    "kind": "frame_render", "frame_index": index, "frame_total": len(detected_regions),
+                    "frame_name": region.name, "base_images": list(base_images),
+                },
+            )
     logger.info("Rendered drawing base maps source=%s count=%s output_dir=%s", dxf_path, len(base_images), output_dir)
     return base_images

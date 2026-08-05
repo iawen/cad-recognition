@@ -25,7 +25,14 @@ def _run_analysis(run_id: str, drawing_path: Path) -> None:
         update_run(run_id, status="running", phase="preflight", progress=10, message="正在校验图纸与转换器配置。")
         update_run(run_id, status="running", phase="vector_parse", progress=25, message="正在解析 DXF 实体、Block 和原生文字。")
 
+        available_base_images: list[dict[str, Any]] = []
+
         def report_work(phase: str, progress: int, message: str, work: dict[str, Any]) -> None:
+            nonlocal available_base_images
+            if "base_images" in work:
+                available_base_images = list(work["base_images"])
+            elif available_base_images:
+                work = {**work, "base_images": available_base_images}
             update_run(run_id, status="running", phase=phase, progress=progress, message=message, work=work)
 
         render_dir = RENDER_ROOT / run_id

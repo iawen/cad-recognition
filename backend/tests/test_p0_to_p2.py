@@ -17,9 +17,9 @@ from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, Nativ
 from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from fusion.text_association import associate_component_texts, associate_native_text
-from rendering.dxf_renderer import render_dxf_region_to_png, render_dxf_to_png
+from rendering.dxf_renderer import render_dxf_region_to_png, render_dxf_regions_to_png
 from rendering.regions import DrawingRegion, detect_drawing_regions
-from rendering.tiling import create_tiles
+from rendering.tiling import create_cad_tiles
 from recognition.vlm_detector import VlmDetector
 from recognition.vlm_detector import VlmDetection
 from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
@@ -88,9 +88,17 @@ class P0ToP2RegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             drawing = self._create_dxf(root)
-            image = render_dxf_to_png(drawing, root / "drawing.png", dpi=72)
-            tiles = create_tiles(image, root / "tiles", tile_size=256, overlap=32)
-        self.assertTrue(tiles)
+            frame = DrawingRegion("frame", 0, 0, 100, 50)
+            tiles = create_cad_tiles(frame, tile_size=256, overlap=32, reference_long_edge_px=512)
+            rendered = render_dxf_regions_to_png(
+                drawing,
+                [(root / "tiles" / tile.name, tile.region) for tile in tiles],
+                dpi=72,
+                max_size_inches=256 / 72,
+            )
+            self.assertTrue(tiles)
+            self.assertEqual(len(rendered), len(tiles))
+            self.assertTrue(all(path.is_file() for path in rendered))
 
     def test_repository_persists_structured_current_work(self):
         with tempfile.TemporaryDirectory() as temp_dir:

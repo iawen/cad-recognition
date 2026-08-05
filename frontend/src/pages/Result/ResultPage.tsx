@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Alert, Spin, message } from 'antd';
-import { getTaskStatus, getSymbols, getTables, getTexts } from '../../api/recognition';
+import { getTaskStatus, getSymbols, getTables, getTexts, streamTaskProgress } from '../../api/recognition';
 import {
   RecognitionTask,
   ElectricalSymbol,
@@ -20,37 +20,87 @@ export default function ResultPage() {
   const [symbols, setSymbols] = useState<ElectricalSymbol[]>([]);
   const [tables, setTables] = useState<ExtractedTable[]>([]);
   const [texts, setTexts] = useState<ExtractedText[]>([]);
-  const { selectedSheetIndex } = useCanvasStore();
+  const { selectedSheetIndex, setSelectedSheetIndex } = useCanvasStore();
+  const resultLoadedRef = useRef(false);
+
+  const loadCompletedData = useCallback(async () => {
+    if (!taskId || resultLoadedRef.current) return;
+    resultLoadedRef.current = true;
+    try {
+      const [symbolsRes, tablesRes, textsRes] = await Promise.all([
+        getSymbols(taskId),
+        getTables(taskId),
+        getTexts(taskId),
+      ]);
+      setSymbols(symbolsRes.data);
+      setTables(tablesRes.data);
+      setTexts(textsRes.data);
+      message.success('识别完成！');
+    } catch {
+      resultLoadedRef.current = false;
+      message.error('加载识别结果失败');
+    }
+  }, [taskId]);
 
   useEffect(() => {
     if (!taskId) return;
+    let disposed = false;
+    let cleanupSource: EventSource | null = null;
+    resultLoadedRef.current = false;
 
-    const fetchData = async () => {
+    const initialize = async () => {
       try {
         setLoading(true);
         const taskRes = await getTaskStatus(taskId);
+        if (disposed) return;
         setTask(taskRes.data);
         if (taskRes.data.status === 'failed') {
           message.error(taskRes.data.error || '识别任务失败，请查看任务错误信息');
           return;
         }
-        const [symbolsRes, tablesRes, textsRes] = await Promise.all([
-          getSymbols(taskId),
-          getTables(taskId),
-          getTexts(taskId),
-        ]);
-        setSymbols(symbolsRes.data);
-        setTables(tablesRes.data);
-        setTexts(textsRes.data);
+        if (taskRes.data.status === 'completed') {
+          await loadCompletedData();
+          return;
+        }
+
+        let source: EventSource | null = null;
+        source = streamTaskProgress(
+          taskId,
+          ({ task: streamedTask }) => {
+            if (disposed) return;
+            setTask(streamedTask);
+            if (streamedTask.status === 'completed') {
+              source?.close();
+              void loadCompletedData();
+            }
+            if (streamedTask.status === 'failed') {
+              source?.close();
+              message.error(streamedTask.error || '识别任务失败，请查看任务错误信息');
+            }
+          },
+          // EventSource 自动重连；不在此处关闭连接或发起轮询。
+          () => undefined,
+        );
+        if (disposed) source.close();
+        else cleanupSource = source;
       } catch {
-        message.error('加载识别结果失败');
+        if (!disposed) message.error('加载识别任务失败');
       } finally {
-        setLoading(false);
+        if (!disposed) setLoading(false);
       }
     };
+    void initialize();
+    return () => {
+      disposed = true;
+      cleanupSource?.close();
+    };
+  }, [loadCompletedData, taskId]);
 
-    fetchData();
-  }, [taskId]);
+  useEffect(() => {
+    if (task && !task.sheets.some((sheet) => sheet.index === selectedSheetIndex)) {
+      setSelectedSheetIndex(0);
+    }
+  }, [selectedSheetIndex, setSelectedSheetIndex, task]);
 
   // 根据选中的图纸页筛选数据
   const sheetLabel = `页${selectedSheetIndex + 1}`;
@@ -129,6 +179,16 @@ export default function ResultPage() {
           showIcon
           message="视觉识别未完成"
           description={task.warning}
+          style={{ margin: '12px 16px 0' }}
+        />
+      )}
+
+      {task.status !== 'completed' && (
+        <Alert
+          type="info"
+          showIcon
+          message={`识别中：${task.progress}%`}
+          description={task.message || '正在等待识别进度推送。'}
           style={{ margin: '12px 16px 0' }}
         />
       )}

@@ -1,11 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Upload, Button, Card, Table, Tag, Progress, message, Space, Typography } from 'antd';
+import { useState, useEffect, useCallback } from 'react';
+import { Upload, Button, Card, Table, Tag, Progress, Space, Typography } from 'antd';
 import { InboxOutlined, FileOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { UploadProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { uploadFile } from '../../api/upload';
-import { streamTaskProgress } from '../../api/recognition';
 import { UploadTask } from '../../types/upload';
 
 const { Dragger } = Upload;
@@ -15,10 +14,6 @@ export default function UploadPage() {
   const navigate = useNavigate();
   const [uploading, setUploading] = useState(false);
   const [taskList, setTaskList] = useState<UploadTask[]>([]);
-  const streams = useRef(new Map<string, EventSource>());
-
-  useEffect(() => () => streams.current.forEach((source) => source.close()), []);
-
   // 从 localStorage 加载历史任务
   useEffect(() => {
     const saved = localStorage.getItem('cad_task_history');
@@ -36,57 +31,6 @@ export default function UploadPage() {
     localStorage.setItem('cad_task_history', JSON.stringify(tasks));
   }, []);
 
-  /** 接收服务器主动推送的任务状态。 */
-  const streamTaskStatus = useCallback(
-    (taskId: string, fileName: string, fileSize: number) => {
-      const source = streamTaskProgress(
-        taskId,
-        ({ task: streamedTask }) => {
-          const task: UploadTask = {
-            taskId,
-            fileName,
-            fileSize,
-            status: streamedTask.status as UploadTask['status'],
-            progress: streamedTask.progress,
-            createdAt: streamedTask.createdAt,
-            completedAt: streamedTask.completedAt,
-            message: streamedTask.message,
-            currentWork: streamedTask.currentWork,
-          };
-
-          setTaskList((prev) => {
-            const idx = prev.findIndex((t) => t.taskId === taskId);
-            const updated =
-              idx >= 0
-                ? prev.map((t, i) => (i === idx ? task : t))
-                : [task, ...prev];
-            localStorage.setItem('cad_task_history', JSON.stringify(updated));
-            return updated;
-          });
-
-          if (task.status === 'completed' || task.status === 'failed') {
-            source.close();
-            streams.current.delete(taskId);
-            setUploading(false);
-            if (task.status === 'completed') {
-              message.success('识别完成！');
-              navigate(`/result/${taskId}`);
-            } else {
-              message.error('识别失败，请重试');
-            }
-          }
-        },
-        () => {
-          source.close();
-          streams.current.delete(taskId);
-          setUploading(false);
-        }
-      );
-      streams.current.set(taskId, source);
-    },
-    [navigate]
-  );
-
   const handleUpload: UploadProps['customRequest'] = async (options) => {
     const file = options.file as File;
     setUploading(true);
@@ -97,10 +41,8 @@ export default function UploadPage() {
       });
       options.onSuccess?.(res, file);
 
-      message.loading({ content: '文件上传成功，正在识别中...', key: 'upload' });
-
       const taskId = res.data.taskId;
-      // 先添加到列表
+      // 保留历史记录；识别页会建立 SSE 连接并接收后续状态。
       saveTaskList([
         {
           taskId,
@@ -112,9 +54,8 @@ export default function UploadPage() {
         },
         ...taskList,
       ]);
-
-      // 服务端主动推送识别进度与当前工作。
-      streamTaskStatus(taskId, file.name, file.size);
+      setUploading(false);
+      navigate(`/result/${taskId}`);
     } catch {
       options.onError?.(new Error('上传失败'));
       setUploading(false);
