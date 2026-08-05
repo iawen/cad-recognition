@@ -1,9 +1,10 @@
 """Per-frame DXF vector-template component detection.
 
-Template registration is deliberately explicit: a DXF filename alone cannot
-reliably identify one of the catalog component types. Configure templates in
-``backend/data/component-templates.json`` or set
-``DRAWING_TEMPLATE_MANIFEST`` to another JSON manifest.
+Runtime vector templates are discovered from categorized DXF files below
+``backend/data/runtime/reference-icons/<component_type>/``. The directory name
+provides the catalog component type, so a filename alone is never used for
+classification. ``DRAWING_TEMPLATE_MANIFEST`` remains available as an optional
+supplement for templates stored elsewhere.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from tools.logger import logger
 
 
 ProgressCallback = Callable[[str, int, str, dict[str, Any]], None]
-_DEFAULT_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "component-templates.json"
+_REFERENCE_TEMPLATE_ROOT = Path(__file__).resolve().parents[1] / "data" / "runtime" / "reference-icons"
 
 
 @dataclass(frozen=True)
@@ -33,18 +34,35 @@ class ComponentTemplate:
     min_confidence: float = 0.9
 
 
-def load_component_templates() -> list[ComponentTemplate]:
-    """Load valid, explicitly typed DXF templates from the local manifest."""
-    manifest_path = Path(os.getenv("DRAWING_TEMPLATE_MANIFEST", _DEFAULT_MANIFEST))
+def _reference_icon_templates(valid_types: set[str]) -> list[ComponentTemplate]:
+    """Load typed DXF files from ``reference-icons/<component_type>/``."""
+    if not _REFERENCE_TEMPLATE_ROOT.is_dir():
+        logger.info("Template reference directory unavailable path=%s", _REFERENCE_TEMPLATE_ROOT)
+        return []
+    templates: list[ComponentTemplate] = []
+    for path in sorted(_REFERENCE_TEMPLATE_ROOT.rglob("*.dxf")):
+        relative_path = path.relative_to(_REFERENCE_TEMPLATE_ROOT)
+        component_type = relative_path.parts[0] if len(relative_path.parts) > 1 else ""
+        if component_type not in valid_types or not path.is_file():
+            continue
+        templates.append(ComponentTemplate(component_type, path.resolve(), path.stem))
+    logger.info(
+        "Template reference directory scanned path=%s configured_templates=%s",
+        _REFERENCE_TEMPLATE_ROOT, len(templates),
+    )
+    return templates
+
+
+def _manifest_templates(manifest_path: Path, valid_types: set[str]) -> list[ComponentTemplate]:
+    """Load valid, explicitly typed supplemental DXF templates from a manifest."""
     if not manifest_path.is_file():
-        logger.info("Template manifest unavailable path=%s; vector template stage is disabled", manifest_path)
+        logger.info("Template manifest unavailable path=%s", manifest_path)
         return []
     try:
         entries = json.loads(manifest_path.read_text(encoding="utf-8")).get("templates", [])
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Template manifest unreadable path=%s error=%s", manifest_path, exc)
         return []
-    valid_types = set(supported_component_types())
     templates: list[ComponentTemplate] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -65,6 +83,28 @@ def load_component_templates() -> list[ComponentTemplate]:
         templates.append(ComponentTemplate(component_type, path, str(entry.get("name") or path.stem), minimum))
     logger.info("Template manifest loaded path=%s configured_templates=%s", manifest_path, len(templates))
     return templates
+
+
+def load_component_templates() -> list[ComponentTemplate]:
+    """Load categorized runtime DXF templates and optional manifest additions."""
+    valid_types = set(supported_component_types())
+    templates = _reference_icon_templates(valid_types)
+    manifest_value = os.getenv("DRAWING_TEMPLATE_MANIFEST")
+    if manifest_value:
+        templates.extend(_manifest_templates(Path(manifest_value), valid_types))
+
+    # The same template may be reached through a symlink or an explicit
+    # manifest entry. Match it only once to avoid duplicate candidates.
+    unique_templates: list[ComponentTemplate] = []
+    seen_paths: set[Path] = set()
+    for template in templates:
+        resolved_path = template.path.resolve()
+        if resolved_path in seen_paths:
+            continue
+        seen_paths.add(resolved_path)
+        unique_templates.append(template)
+    logger.info("Vector template loading completed configured_templates=%s", len(unique_templates))
+    return unique_templates
 
 
 def _intersects_region(entity: Any, region: DrawingRegion) -> bool:

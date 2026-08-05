@@ -330,7 +330,7 @@ async def get_frontend_symbols(task_id: str):
     result = _completed_result(task_id)
     component_boxes, _ = _normalized_boxes(result)
     base_images = result.get("drawing", {}).get("base_images", [])
-    symbols = []
+    symbols_by_type: dict[str, dict] = {}
     for component in result.get("components", []):
         attributes = [{"key": key, "value": value} for key, value in component["evidence"].get("attributes", {}).items()]
         if component.get("value"):
@@ -338,13 +338,27 @@ async def get_frontend_symbols(task_id: str):
         catalog_name = component["evidence"].get("catalog_name")
         catalog_category = component["evidence"].get("catalog_category")
         name = component.get("reference") or catalog_name or component["type"]
-        symbols.append({
-            "id": component["id"], "name": name, "model": component.get("value"),
-            "category": catalog_category or component["type"], "quantity": 1, "attributes": attributes,
-            "position": {"x": component["cad_center"]["x"], "y": component["cad_center"]["y"], "sheet": f"页{(_base_image_for_record(base_images, component, component['cad_center']) or {'index': 0})['index'] + 1}"},
-            "confidence": component["confidence"], "boundingBox": component_boxes.get(component["id"], {"x": 0, "y": 0, "width": 0.035, "height": 0.035}),
-            "color": _COMPONENT_COLORS.get(component["type"], "#8C8C8C"),
-        })
+        component_type = component["type"]
+        position = {"x": component["cad_center"]["x"], "y": component["cad_center"]["y"], "sheet": f"页{(_base_image_for_record(base_images, component, component['cad_center']) or {'index': 0})['index'] + 1}"}
+        # A component type is only meaningful within its drawing frame. Do not
+        # collapse identical symbols from separate main frames into one group.
+        group_key = f"{component_type}:frame:{position['sheet']}"
+        instance = {
+            "id": component["id"], "name": name, "confidence": component["confidence"],
+            "boundingBox": component_boxes.get(component["id"], {"x": 0, "y": 0, "width": 0.035, "height": 0.035}),
+        }
+        group = symbols_by_type.get(group_key)
+        if group is None:
+            symbols_by_type[group_key] = {
+                "id": group_key, "type": component_type, "name": name, "model": component.get("value"),
+                "category": catalog_category or component_type, "quantity": 1, "attributes": attributes,
+                "position": position, "confidence": component["confidence"], "boundingBox": instance["boundingBox"],
+                "color": _COMPONENT_COLORS.get(component_type, "#8C8C8C"), "instances": [instance],
+            }
+        else:
+            group["quantity"] += 1
+            group["instances"].append(instance)
+    symbols = list(symbols_by_type.values())
     logger.info("Frontend symbols returned run_id=%s count=%s", task_id, len(symbols))
     return _response(symbols)
 

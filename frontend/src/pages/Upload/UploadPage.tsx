@@ -6,6 +6,7 @@ import type { UploadProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { uploadFile } from '../../api/upload';
 import { UploadTask } from '../../types/upload';
+import { getTaskStatus } from '../../api/recognition';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -14,16 +15,44 @@ export default function UploadPage() {
   const navigate = useNavigate();
   const [uploading, setUploading] = useState(false);
   const [taskList, setTaskList] = useState<UploadTask[]>([]);
-  // 从 localStorage 加载历史任务
+  // 从 localStorage 加载历史任务，并用后端状态纠正过期的本地记录。
   useEffect(() => {
     const saved = localStorage.getItem('cad_task_history');
-    if (saved) {
-      try {
-        setTaskList(JSON.parse(saved));
-      } catch {
-        /* ignore */
-      }
+    if (!saved) return;
+    let active = true;
+    try {
+      const storedTasks = JSON.parse(saved) as UploadTask[];
+      setTaskList(storedTasks);
+      void Promise.all(storedTasks.map(async (storedTask) => {
+        try {
+          const response = await getTaskStatus(storedTask.taskId);
+          const task = response.data;
+          return {
+            ...storedTask,
+            fileName: task.fileName,
+            fileSize: task.fileSize,
+            status: task.status as UploadTask['status'],
+            progress: task.progress,
+            createdAt: task.createdAt,
+            completedAt: task.completedAt,
+            message: task.message,
+            currentWork: task.currentWork,
+          };
+        } catch {
+          // Keep a historical record when the backend no longer retains it.
+          return storedTask;
+        }
+      })).then((updatedTasks) => {
+        if (!active) return;
+        setTaskList(updatedTasks);
+        localStorage.setItem('cad_task_history', JSON.stringify(updatedTasks));
+      });
+    } catch {
+      /* ignore invalid local history */
     }
+    return () => {
+      active = false;
+    };
   }, []);
 
   const saveTaskList = useCallback((tasks: UploadTask[]) => {
@@ -65,6 +94,7 @@ export default function UploadPage() {
   const describeWork = (task: UploadTask) => {
     const work = task.currentWork;
     if (work?.kind === 'template_match') return `模板 ${work.template_index! + 1}/${work.template_total}: ${work.template_name}`;
+    if (work?.kind === 'frame_components') return `主图框 ${work.frame_index! + 1}/${work.frame_total} 已识别 ${work.components?.length || 0} 个元器件`;
     if (work?.kind === 'frame_vector_parse') return `正在解析主图框 ${work.frame_index! + 1}/${work.frame_total}`;
     if (work?.kind === 'frame_render') return `正在保存主图框 ${work.frame_index! + 1}/${work.frame_total} 的底图`;
     if (work?.tile_index !== undefined) return `主图框 ${work.frame_index! + 1}/${work.frame_total}，区域 ${work.tile_index + 1}/${work.tile_total}`;

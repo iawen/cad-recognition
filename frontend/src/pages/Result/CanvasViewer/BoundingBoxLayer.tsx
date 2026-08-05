@@ -43,7 +43,7 @@ function flattenSymbols(symbols: ElectricalSymbol[]): RenderBox[] {
     if (sym.instances && sym.instances.length > 0) {
       return sym.instances.map((inst) => ({
         instanceId: inst.id,
-        groupName: sym.name,
+        groupName: sym.type || sym.id,
         displayName: inst.name,
         confidence: inst.confidence,
         boundingBox: inst.boundingBox,
@@ -53,7 +53,7 @@ function flattenSymbols(symbols: ElectricalSymbol[]): RenderBox[] {
     return [
       {
         instanceId: sym.id,
-        groupName: sym.name,
+        groupName: sym.type || sym.id,
         displayName: sym.name,
         confidence: sym.confidence,
         boundingBox: sym.boundingBox,

@@ -61,7 +61,7 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
           s.name.toLowerCase().includes(keyword) ||
           s.category.toLowerCase().includes(keyword)
       )
-      .map((s) => s.name);
+      .map((s) => s.type || s.id);
     // 合并手动展开和搜索自动展开
     return Array.from(new Set([...expandedSymbolGroups, ...matched]));
   }, [search, symbols, expandedSymbolGroups]);
@@ -71,8 +71,9 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
 
   /** 点击组头：切换展开 + 设置组高亮 */
   const handleGroupClick = (sym: ElectricalSymbol) => {
+    const groupKey = sym.type || sym.id;
     // 判断当前组是否处于高亮状态
-    const isGroupHighlighted = highlightedSymbolGroup === sym.name && highlightedSymbolId === null;
+    const isGroupHighlighted = highlightedSymbolGroup === groupKey && highlightedSymbolId === null;
 
     if (isGroupHighlighted) {
       // 取消高亮
@@ -80,11 +81,11 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
       setHighlightedSymbolId(null);
     } else {
       // 设置组高亮，清除单实例高亮
-      setHighlightedSymbolGroup(sym.name);
+      setHighlightedSymbolGroup(groupKey);
       setHighlightedSymbolId(null);
     }
     // 切换展开
-    toggleSymbolGroup(sym.name);
+    toggleSymbolGroup(groupKey);
   };
 
   /** 点击子实例 */
@@ -120,17 +121,18 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
       {/* 元件分组列表 */}
       <div ref={listRef} style={{ flex: 1, overflow: 'auto' }}>
         {filteredSymbols.map((sym) => {
-          const isExpanded = visibleExpanded.includes(sym.name);
-          const isGroupHL = highlightedSymbolGroup === sym.name && highlightedSymbolId === null;
+          const groupKey = sym.type || sym.id;
+          const isExpanded = visibleExpanded.includes(groupKey);
+          const isGroupHL = highlightedSymbolGroup === groupKey && highlightedSymbolId === null;
           const instances = sym.instances || [];
           // 是否有子实例被选中
-          const hasSelectedChild = highlightedSymbolGroup === sym.name && highlightedSymbolId !== null;
+          const hasSelectedChild = highlightedSymbolGroup === groupKey && highlightedSymbolId !== null;
 
           return (
             <div key={sym.id} style={{ marginBottom: 4 }}>
               {/* ==== 组头（父级） ==== */}
               <div
-                data-symbol-group={sym.name}
+                data-symbol-group={groupKey}
                 onClick={() => handleGroupClick(sym)}
                 style={{
                   padding: '8px 10px',
@@ -187,7 +189,7 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
                 <Space size={4}>
                   <Tag style={{ margin: 0, fontSize: 10 }}>{sym.category}</Tag>
                   <Badge
-                    count={instances.length}
+                    count={sym.quantity}
                     size="small"
                     style={{ backgroundColor: sym.color, fontSize: 10 }}
                   />
@@ -212,7 +214,7 @@ export default function SymbolTab({ symbols }: SymbolTabProps) {
                         data-symbol-id={inst.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleInstanceClick(inst.id, sym.name);
+                          handleInstanceClick(inst.id, groupKey);
                         }}
                         style={{
                           padding: '6px 10px',

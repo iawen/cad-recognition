@@ -77,6 +77,17 @@ def _is_duplicate_vector_candidate(candidate: object, existing: list, region: Dr
     )
 
 
+def _recognized_component_work(components: list, frame_index: int, frame_total: int, frame_name: str) -> dict[str, Any]:
+    """Serialize the cumulative per-frame component result for live clients."""
+    return {
+        "kind": "frame_components",
+        "frame_index": frame_index,
+        "frame_total": frame_total,
+        "frame_name": frame_name,
+        "components": [component.model_dump(mode="json") for component in components],
+    }
+
+
 def analyze_drawing(
     path: Path,
     *,
@@ -168,6 +179,12 @@ def analyze_drawing(
                     "Drawing analysis VLM fallback skipped frame=%s vector_components=%s sources=%s",
                     region.name, len(vector_components), sorted({item.source for item in vector_components}),
                 )
+                if progress_callback:
+                    progress_callback(
+                        "frame_components", 53 + round(35 * (frame_index + 1) / max(len(regions), 1)),
+                        f"主图框 {frame_index + 1}/{len(regions)} 已识别 {len(vector_components)} 个元器件。",
+                        _recognized_component_work(parsed.components, frame_index, len(regions), region.name),
+                    )
                 continue
             logger.info("Drawing analysis VLM fallback started frame=%s reason=no_reliable_vector_candidate", region.name)
             try:
@@ -189,6 +206,14 @@ def analyze_drawing(
             except RuntimeError as exc:
                 visual_error = str(exc)
                 logger.warning("Visual recognition skipped source=%s frame=%s error=%s", path, region.name, exc)
+            if progress_callback:
+                recognized_components = [*parsed.components, *visual_components]
+                frame_component_count = sum(item.frame_index == frame_index for item in recognized_components)
+                progress_callback(
+                    "frame_components", 53 + round(35 * (frame_index + 1) / max(len(regions), 1)),
+                    f"主图框 {frame_index + 1}/{len(regions)} 已识别 {frame_component_count} 个元器件。",
+                    _recognized_component_work(recognized_components, frame_index, len(regions), region.name),
+                )
             try:
                 visual_text_response = detect_visual_texts(
                     dxf_path, include_audit=True, progress_callback=progress_callback,

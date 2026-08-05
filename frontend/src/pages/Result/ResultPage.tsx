@@ -7,11 +7,14 @@ import {
   ElectricalSymbol,
   ExtractedTable,
   ExtractedText,
+  ProgressiveComponent,
 } from '../../types/recognition';
+import { UploadTask } from '../../types/upload';
 import { useCanvasStore } from '../../store/canvasStore';
 import ResultHeader from './ResultHeader';
 import LeftPanel from './LeftPanel';
 import CanvasViewer from './CanvasViewer/CanvasViewer';
+import { getSymbolColor } from '../../utils/colors';
 
 export default function ResultPage() {
   const { taskId } = useParams<{ taskId: string }>();
@@ -22,6 +25,75 @@ export default function ResultPage() {
   const [texts, setTexts] = useState<ExtractedText[]>([]);
   const { selectedSheetIndex, setSelectedSheetIndex } = useCanvasStore();
   const resultLoadedRef = useRef(false);
+
+  const syncTaskHistory = useCallback((snapshot: RecognitionTask) => {
+    const historyKey = 'cad_task_history';
+    let history: UploadTask[] = [];
+    try {
+      history = JSON.parse(localStorage.getItem(historyKey) || '[]') as UploadTask[];
+    } catch {
+      // Replace malformed local history with the current authoritative task.
+    }
+    const updatedTask: UploadTask = {
+      taskId: snapshot.taskId,
+      fileName: snapshot.fileName,
+      fileSize: snapshot.fileSize,
+      status: snapshot.status as UploadTask['status'],
+      progress: snapshot.progress,
+      createdAt: snapshot.createdAt,
+      completedAt: snapshot.completedAt,
+      message: snapshot.message,
+      currentWork: snapshot.currentWork,
+    };
+    const existingIndex = history.findIndex((item) => item.taskId === snapshot.taskId);
+    if (existingIndex >= 0) history[existingIndex] = updatedTask;
+    else history.unshift(updatedTask);
+    localStorage.setItem(historyKey, JSON.stringify(history));
+  }, []);
+
+  const applyProgressiveComponents = useCallback((components: ProgressiveComponent[]) => {
+    const groups = new Map<string, ElectricalSymbol>();
+    components.forEach((component) => {
+      const attributes = Object.entries(component.evidence.attributes || {}).map(([key, value]) => ({ key, value }));
+      if (component.value) attributes.push({ key: '参数', value: component.value });
+      const name = component.reference || component.evidence.catalog_name || component.type;
+      const instance = {
+        id: component.id,
+        name,
+        confidence: component.confidence,
+        boundingBox: { x: 0, y: 0, width: 0.035, height: 0.035 },
+      };
+      const frameIndex = component.frame_index ?? 0;
+      const groupId = `${component.type}:frame:${frameIndex}`;
+      const existing = groups.get(groupId);
+      if (existing) {
+        existing.quantity += 1;
+        existing.instances?.push(instance);
+        return;
+      }
+      groups.set(groupId, {
+        id: groupId,
+        type: component.type,
+        name,
+        model: component.value || undefined,
+        category: component.evidence.catalog_category || component.type,
+        quantity: 1,
+        attributes,
+        position: {
+          x: component.cad_center.x,
+          y: component.cad_center.y,
+          sheet: `页${(component.frame_index ?? 0) + 1}`,
+        },
+        confidence: component.confidence,
+        // Exact projected boxes are supplied with the final result. A compact
+        // placeholder keeps a live item selectable while recognition continues.
+        boundingBox: instance.boundingBox,
+        color: getSymbolColor(groups.size),
+        instances: [instance],
+      });
+    });
+    setSymbols([...groups.values()]);
+  }, []);
 
   const loadCompletedData = useCallback(async () => {
     if (!taskId || resultLoadedRef.current) return;
@@ -54,6 +126,10 @@ export default function ResultPage() {
         const taskRes = await getTaskStatus(taskId);
         if (disposed) return;
         setTask(taskRes.data);
+        syncTaskHistory(taskRes.data);
+        if (taskRes.data.currentWork?.kind === 'frame_components' && taskRes.data.currentWork.components) {
+          applyProgressiveComponents(taskRes.data.currentWork.components);
+        }
         if (taskRes.data.status === 'failed') {
           message.error(taskRes.data.error || '识别任务失败，请查看任务错误信息');
           return;
@@ -66,9 +142,13 @@ export default function ResultPage() {
         let source: EventSource | null = null;
         source = streamTaskProgress(
           taskId,
-          ({ task: streamedTask }) => {
+          ({ task: streamedTask, event }) => {
             if (disposed) return;
             setTask(streamedTask);
+            syncTaskHistory(streamedTask);
+            if (event.work?.kind === 'frame_components' && event.work.components) {
+              applyProgressiveComponents(event.work.components);
+            }
             if (streamedTask.status === 'completed') {
               source?.close();
               void loadCompletedData();
@@ -94,7 +174,7 @@ export default function ResultPage() {
       disposed = true;
       cleanupSource?.close();
     };
-  }, [loadCompletedData, taskId]);
+  }, [applyProgressiveComponents, loadCompletedData, syncTaskHistory, taskId]);
 
   useEffect(() => {
     if (task && !task.sheets.some((sheet) => sheet.index === selectedSheetIndex)) {
@@ -211,9 +291,9 @@ export default function ResultPage() {
             tables={filteredTables}
             texts={filteredTexts}
             sheetIndex={selectedSheetIndex}
-            imageUrl={selectedBaseImage?.imageUrl || task.imageUrl}
-            imageWidth={selectedBaseImage?.imageWidth || task.imageWidth}
-            imageHeight={selectedBaseImage?.imageHeight || task.imageHeight}
+            imageUrl={selectedBaseImage?.imageUrl || ''}
+            imageWidth={selectedBaseImage?.imageWidth || 0}
+            imageHeight={selectedBaseImage?.imageHeight || 0}
           />
         </div>
       </div>

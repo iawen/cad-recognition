@@ -47,4 +47,8 @@ DRAWING_VLM_TIMEOUT_SECONDS=30
 
 将 `DRAWING_VLM_REFERENCE_LIMIT` 调低可减少请求成本；设为 `0` 或将 `DRAWING_VLM_USE_EXCEL_REFERENCES=false` 可关闭参考图。`DRAWING_VLM_TIMEOUT_SECONDS` 默认为 30 秒，避免不支持或无法响应图片请求的模型使整张图纸长时间阻塞。每个切片的模型名、耗时、参考图数量、有效候选数及失败状态会写入任务结果的 `audit.visual_detection`，不会保存密钥、请求正文或图片数据。
 
+### DXF 矢量模板
+
+将已分类的 DXF 元器件符号放入 `backend/data/runtime/reference-icons/<component_type>/`，服务会在每次任务开始时自动加载其中所有 `.dxf` 文件作为矢量模板。例如，断路器模板应放在 `backend/data/runtime/reference-icons/circuit_breaker/`。目录名必须是受支持的规范类别名；文件名仅作为显示名称，不参与类别推断。可选的 `DRAWING_TEMPLATE_MANIFEST` 仅用于补充该目录以外的模板。
+
 若 VLM 调用失败且 `.env` 同时配置了可用的 `DRAWING_OBB_MODEL`，处理流程会自动改用 OBB 检测器继续处理后续切片；未配置 OBB 权重时会保留矢量识别结果及失败原因。

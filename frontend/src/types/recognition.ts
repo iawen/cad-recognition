@@ -27,6 +27,8 @@ export interface SymbolInstance {
 /** 电气符号/设备图例 */
 export interface ElectricalSymbol {
   id: string;
+  /** Backend canonical component type; this is the sidebar grouping key. */
+  type?: string;
   name: string;
   model?: string;
   category: string;
@@ -109,7 +111,7 @@ export interface RecognitionTask {
 
 /** 识别任务正在执行的细粒度工作单元。 */
 export interface RecognitionWork {
-  kind: 'drawing_frames' | 'frame_vector_parse' | 'template_match' | 'vlm_component_frame' | 'vlm_component_tile' | 'vlm_text_frame' | 'vlm_text_tile' | 'frame_render';
+  kind: 'drawing_frames' | 'frame_vector_parse' | 'frame_components' | 'template_match' | 'vlm_component_frame' | 'vlm_component_tile' | 'vlm_text_frame' | 'vlm_text_tile' | 'frame_render';
   frame_index?: number;
   frame_total?: number;
   frame_name?: string;
@@ -119,4 +121,21 @@ export interface RecognitionWork {
   template_index?: number;
   template_total?: number;
   template_name?: string;
+  components?: ProgressiveComponent[];
+}
+
+/** A component emitted while the backend is still processing drawing frames. */
+export interface ProgressiveComponent {
+  id: string;
+  type: string;
+  reference?: string | null;
+  value?: string | null;
+  cad_center: { x: number; y: number };
+  confidence: number;
+  frame_index?: number | null;
+  evidence: {
+    attributes?: Record<string, string>;
+    catalog_name?: string | null;
+    catalog_category?: string | null;
+  };
 }

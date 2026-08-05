@@ -2,7 +2,6 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { Image as KonvaImage, Stage, Layer } from 'react-konva';
 import { KonvaEventObject } from 'konva/lib/Node';
 import { ElectricalSymbol, ExtractedTable, ExtractedText } from '../../../types/recognition';
-import CadDiagramLayer from './CadDiagramLayer';
 import BoundingBoxLayer from './BoundingBoxLayer';
 
 interface CanvasViewerProps {
@@ -155,13 +154,11 @@ export default function CanvasViewer({
           setPosition({ x: e.target.x(), y: e.target.y() });
         }}
       >
-        {/* 优先展示当前上传图纸的渲染结果；没有底图时才使用示意图。 */}
+        {/* 仅显示当前任务生成的真实图纸底图，不再加载默认示意图。 */}
         <Layer key={`diagram-${sheetIndex}`}>
           {drawingImage ? (
             <KonvaImage image={drawingImage} x={0} y={0} width={renderedWidth} height={renderedHeight} />
-          ) : (
-            <CadDiagramLayer sheetIndex={sheetIndex} symbols={symbols} />
-          )}
+          ) : null}
         </Layer>
 
         {/* 标注层：交互式边界框 */}
@@ -176,6 +173,16 @@ export default function CanvasViewer({
           />
         </Layer>
       </Stage>
+      {!drawingImage && (
+        <div
+          style={{
+            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#a6a6b8', fontSize: 14, pointerEvents: 'none',
+          }}
+        >
+          当前主图框底图尚未生成
+        </div>
+      )}
     </div>
   );
 }
