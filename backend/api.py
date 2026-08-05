@@ -20,7 +20,7 @@ from ingest.file_validation import SUPPORTED_EXTENSIONS
 from ingest.dwg_converter import use_realdwg
 from recognition.component_catalog import CATALOG_SOURCE, catalog_capabilities
 from recognition.reference_icons import reference_icon_summary
-from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events
+from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events, wait_for_event
 from runtime.worker import submit_analysis
 from service import analyze_drawing, render_dxf_base_maps
 from tools.logger import logger
@@ -131,6 +131,9 @@ def _frontend_task(run: dict) -> dict[str, object]:
         "fileSize": size.stat().st_size if size and size.is_file() else 0,
         "status": _frontend_status(run["status"]),
         "progress": run["progress"],
+        "phase": run["phase"],
+        "message": run["message"],
+        "currentWork": run.get("work"),
         "createdAt": run["created_at"],
         "completedAt": completed_at,
         "error": run.get("error") if run["status"] == "failed" else None,
@@ -424,19 +427,32 @@ async def stream_recognition_run(run_id: str):
         raise HTTPException(404, "识别任务不存在。")
 
     async def generate():
-        last_event_count = -1
+        last_event_id = 0
         while True:
             run = get_run(run_id)
-            events = list_events(run_id)
-            if len(events) != last_event_count:
-                yield f"data: {json.dumps({'run': run, 'events': events}, ensure_ascii=False)}\n\n"
-                last_event_count = len(events)
-            if run and run["status"] in {"succeeded", "failed"}:
+            if run is None:
+                return
+            events = await asyncio.to_thread(wait_for_event, run_id, last_event_id)
+            for event in events:
+                last_event_id = event["id"]
+                snapshot = get_run(run_id)
+                if snapshot is None:
+                    return
+                payload = {
+                    "task": _frontend_task(snapshot),
+                    "event": event,
+                }
+                yield f"event: progress\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            latest_run = get_run(run_id)
+            if latest_run and latest_run["status"] in {"succeeded", "failed"}:
                 break
-            yield ": keepalive\n\n"
-            await asyncio.sleep(0.5)
+            if not events:
+                yield ": keepalive\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+    return StreamingResponse(
+        generate(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/api/drawing-recognition/audit-sample")

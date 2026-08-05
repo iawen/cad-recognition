@@ -11,7 +11,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cad.coordinates import CoordinateTransform
 from domain.models import CadPoint, ComponentCandidate, ComponentEvidence, NativeText
@@ -22,6 +22,9 @@ from rendering.dxf_renderer import render_dxf_region_to_png
 from rendering.regions import DrawingRegion, detect_drawing_regions
 from rendering.tiling import create_tiles
 from tools.logger import logger
+
+
+ProgressCallback = Callable[[str, int, str, dict[str, Any]], None]
 
 
 class VisualDetectionError(RuntimeError):
@@ -83,6 +86,8 @@ def detect_visual_components(
     *,
     detector: ObbDetector | VlmDetector | None = None,
     include_audit: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    frame_contexts: list[tuple[int, DrawingRegion]] | None = None,
 ) -> list[ComponentCandidate] | tuple[list[ComponentCandidate], dict[str, Any]]:
     """Render, tile, infer, map detections, merge overlaps, and retain audit data."""
     primary = detector or VlmDetector()
@@ -105,18 +110,32 @@ def detect_visual_components(
     with tempfile.TemporaryDirectory(prefix="drawing-vision-") as temp_dir:
         root = Path(temp_dir)
         candidates: list[tuple[str, ComponentCandidate, tuple[float, float, float, float]]] = []
-        regions = _drawing_regions(dxf_path)
+        regions = frame_contexts or list(enumerate(_drawing_regions(dxf_path)))
         audit["regions"] = []
         active_detector = primary
         started = time.perf_counter()
         raw_detection_count = 0
         vision_dpi = max(150, int(os.getenv("DRAWING_VISION_DPI", "450")))
-        for frame_index, region in enumerate(regions):
+        for frame_position, (frame_index, region) in enumerate(regions):
+            logger.info(
+                "VLM component frame started frame=%s frame_index=%s frame_total=%s detector=%s dpi=%s",
+                region.name, frame_index + 1, len(regions), active_detector.model_identifier, vision_dpi,
+            )
+            if progress_callback:
+                progress_callback(
+                    "vlm_components", 40,
+                    f"正在准备主图框 {frame_index + 1}/{len(regions)} 的元器件 VLM 识别。",
+                    {"kind": "vlm_component_frame", "frame_index": frame_index, "frame_total": len(regions), "frame_name": region.name},
+                )
             rendered = render_dxf_region_to_png(dxf_path, root / f"{region.name}.png", region, dpi=vision_dpi)
             with Image.open(rendered) as image:
                 transform = _region_transform(region, image.width, image.height)
                 region_size = {"width": image.width, "height": image.height}
             tiles = create_tiles(rendered, root / region.name / "tiles")
+            logger.info(
+                "VLM component frame tiled frame=%s tile_count=%s image_size=%sx%s",
+                region.name, len(tiles), region_size["width"], region_size["height"],
+            )
             audit["regions"].append({
                 "name": region.name,
                 "cad_extent": [region.min_x, region.min_y, region.max_x, region.max_y],
@@ -124,8 +143,17 @@ def detect_visual_components(
                 "tile_count": len(tiles),
             })
             for i, tile in enumerate(tiles):
-                time.sleep(30)
-                print(f"vllm {i+1} / {len(tiles)}")
+                tile_started = time.perf_counter()
+                logger.info(
+                    "VLM component tile started frame=%s tile_index=%s tile_total=%s tile=%s detector=%s",
+                    region.name, i + 1, len(tiles), tile.path.name, active_detector.model_identifier,
+                )
+                if progress_callback:
+                    progress_callback(
+                        "vlm_components", 55 + round(20 * (frame_position + i / max(len(tiles), 1)) / len(regions)),
+                        f"正在识别主图框 {frame_index + 1}/{len(regions)} 的元器件区域 {i + 1}/{len(tiles)}。",
+                        {"kind": "vlm_component_tile", "frame_index": frame_index, "frame_total": len(regions), "frame_name": region.name, "tile_index": i, "tile_total": len(tiles), "tile_name": tile.path.name},
+                    )
                 try:
                     detections = active_detector.detect(tile.path)
                 except RuntimeError as exc:
@@ -148,6 +176,11 @@ def detect_visual_components(
                 request_metadata = getattr(active_detector, "last_request_metadata", None)
                 if request_metadata:
                     audit["tile_requests"].append(dict(request_metadata))
+                logger.info(
+                    "VLM component tile completed frame=%s tile_index=%s tile_total=%s tile=%s raw_detections=%s elapsed_ms=%s",
+                    region.name, i + 1, len(tiles), tile.path.name, len(detections),
+                    round((time.perf_counter() - tile_started) * 1000),
+                )
                 for detection in detections:
                     raw_detection_count += 1
                     component_type = resolve_component_type(detection.label)
@@ -177,6 +210,7 @@ def detect_visual_components(
                     )
                     if not _is_duplicate(region.name, component_type, global_bbox, candidates):
                         candidates.append((region.name, candidate, global_bbox))
+            logger.info("VLM component frame completed frame=%s merged_candidates=%s", region.name, len(candidates))
         audit["tile_count"] = sum(item["tile_count"] for item in audit["regions"])
         audit["vision_dpi"] = vision_dpi
         audit.update({
@@ -186,6 +220,10 @@ def detect_visual_components(
             "duration_ms": round((time.perf_counter() - started) * 1000),
         })
         result = [candidate for _, candidate, _ in candidates]
+        logger.info(
+            "VLM component detection completed source=%s detector=%s raw_detections=%s merged_candidates=%s duration_ms=%s",
+            dxf_path, active_detector.model_identifier, raw_detection_count, len(result), audit["duration_ms"],
+        )
         return (result, audit) if include_audit else result
 
 
@@ -207,6 +245,8 @@ def detect_visual_texts(
     *,
     detector: VlmDetector | None = None,
     include_audit: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    frame_contexts: list[tuple[int, DrawingRegion]] | None = None,
 ) -> list[NativeText] | tuple[list[NativeText], dict[str, Any]]:
     """Use the VLM to extract text from each DXF frame and map it back to CAD."""
     active_detector = detector or VlmDetector()
@@ -222,12 +262,35 @@ def detect_visual_texts(
         results: list[NativeText] = []
         prior: list[tuple[int, VlmTextDetection]] = []
         vision_dpi = max(150, int(os.getenv("DRAWING_VISION_DPI", "450")))
-        for frame_index, region in enumerate(_drawing_regions(dxf_path)):
+        regions = frame_contexts or list(enumerate(_drawing_regions(dxf_path)))
+        for frame_position, (frame_index, region) in enumerate(regions):
+            logger.info(
+                "VLM text frame started frame=%s frame_index=%s frame_total=%s detector=%s dpi=%s",
+                region.name, frame_index + 1, len(regions), active_detector.model_identifier, vision_dpi,
+            )
+            if progress_callback:
+                progress_callback(
+                    "vlm_text", 65,
+                    f"正在准备主图框 {frame_index + 1}/{len(regions)} 的关联文字 VLM 提取。",
+                    {"kind": "vlm_text_frame", "frame_index": frame_index, "frame_total": len(regions), "frame_name": region.name},
+                )
             rendered = render_dxf_region_to_png(dxf_path, root / f"{region.name}.png", region, dpi=vision_dpi)
             with Image.open(rendered) as image:
                 transform = _region_transform(region, image.width, image.height)
             tiles = create_tiles(rendered, root / region.name / "text-tiles")
-            for tile in tiles:
+            logger.info("VLM text frame tiled frame=%s tile_count=%s", region.name, len(tiles))
+            for tile_index, tile in enumerate(tiles):
+                tile_started = time.perf_counter()
+                logger.info(
+                    "VLM text tile started frame=%s tile_index=%s tile_total=%s tile=%s detector=%s",
+                    region.name, tile_index + 1, len(tiles), tile.path.name, active_detector.model_identifier,
+                )
+                if progress_callback:
+                    progress_callback(
+                        "vlm_text", 78 + round(10 * (frame_position + tile_index / max(len(tiles), 1)) / len(regions)),
+                        f"正在提取主图框 {frame_index + 1}/{len(regions)} 的关联文字区域 {tile_index + 1}/{len(tiles)}。",
+                        {"kind": "vlm_text_tile", "frame_index": frame_index, "frame_total": len(regions), "frame_name": region.name, "tile_index": tile_index, "tile_total": len(tiles), "tile_name": tile.path.name},
+                    )
                 try:
                     detections = active_detector.extract_texts(tile.path)
                 except RuntimeError as exc:
@@ -235,6 +298,11 @@ def detect_visual_texts(
                     raise VisualDetectionError(str(exc), audit) from exc
                 if active_detector.last_request_metadata:
                     audit["requests"].append(dict(active_detector.last_request_metadata))
+                logger.info(
+                    "VLM text tile completed frame=%s tile_index=%s tile_total=%s tile=%s raw_texts=%s elapsed_ms=%s",
+                    region.name, tile_index + 1, len(tiles), tile.path.name, len(detections),
+                    round((time.perf_counter() - tile_started) * 1000),
+                )
                 for detection in detections:
                     global_detection = VlmTextDetection(
                         detection.content, detection.confidence, tile.x_offset + detection.center_x,
@@ -255,5 +323,7 @@ def detect_visual_texts(
                             global_detection.center_y + global_detection.height / 2,
                         )],
                     ))
-        audit.update({"frame_count": len(_drawing_regions(dxf_path)), "text_count": len(results), "vision_dpi": vision_dpi})
+            logger.info("VLM text frame completed frame=%s retained_texts=%s", region.name, len(results))
+        audit.update({"frame_count": len(regions), "text_count": len(results), "vision_dpi": vision_dpi})
+        logger.info("VLM text extraction completed source=%s frames=%s texts=%s", dxf_path, len(regions), len(results))
         return (results, audit) if include_audit else results

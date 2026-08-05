@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import tempfile
+from math import hypot
 from pathlib import Path
+from typing import Any, Callable
 
 from cad.dxf_parser import parse_dxf
 from domain.models import DrawingAnalysisResult
@@ -13,9 +15,13 @@ from ingest.dwg_converter import convert_dwg_to_dxf
 from ingest.file_validation import validate_drawing_file
 from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
 from recognition.vision_pipeline import detect_visual_texts
+from recognition.template_detector import detect_template_components, load_component_templates
 from rendering.dxf_renderer import render_dxf_region_to_png, render_dxf_to_png
 from rendering.regions import DrawingRegion, detect_drawing_regions
 from tools.logger import logger
+
+
+ProgressCallback = Callable[[str, int, str, dict[str, Any]], None]
 
 
 def _drawing_regions(dxf_path: Path) -> list[DrawingRegion]:
@@ -61,76 +67,160 @@ def _associate_text_per_frame(parsed: object, regions: list[DrawingRegion]) -> N
     parsed.texts = retained_texts  # type: ignore[attr-defined]
 
 
+def _is_duplicate_vector_candidate(candidate: object, existing: list, region: DrawingRegion) -> bool:
+    """Prefer a known INSERT over an equivalent template match in one frame."""
+    tolerance = max(region.width, region.height, 1.0) * 0.002
+    return any(
+        item.type == candidate.type
+        and hypot(item.cad_center.x - candidate.cad_center.x, item.cad_center.y - candidate.cad_center.y) <= tolerance
+        for item in existing
+    )
+
+
 def analyze_drawing(
     path: Path,
     *,
     max_components: int = 1000,
     render_output_path: Path | None = None,
     render_output_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> DrawingAnalysisResult:
     """Validate input, adapt DWG if needed, parse DXF, then assemble evidence."""
     suffix = validate_drawing_file(path)
+    logger.info("Drawing analysis started source=%s suffix=%s", path, suffix)
     temporary_output: tempfile.TemporaryDirectory[str] | None = None
     try:
         dxf_path = path
         if suffix == ".dwg":
+            logger.info("Drawing analysis converting DWG source=%s", path)
             dxf_path, temporary_output = convert_dwg_to_dxf(path)
+            logger.info("Drawing analysis DWG conversion completed source=%s dxf=%s", path, dxf_path)
         parsed = parse_dxf(dxf_path, max_components=max_components)
+        logger.info(
+            "Drawing analysis native DXF parsed source=%s entities=%s blocks=%s texts=%s unknown_blocks=%s",
+            dxf_path, sum(parsed.entity_types.values()), len(parsed.components), len(parsed.texts), sum(parsed.unknown_blocks.values()),
+        )
         regions = _drawing_regions(dxf_path)
-        if render_output_dir is not None:
-            base_images = render_dxf_base_maps(dxf_path, render_output_dir)
-        else:
-            base_images = []
+        logger.info("Drawing analysis frames detected source=%s frame_count=%s", dxf_path, len(regions))
+        if progress_callback:
+            progress_callback(
+                "frame_detection", 35, f"已识别 {len(regions)} 个主图框，准备渲染与视觉识别。",
+                {"kind": "drawing_frames", "frame_total": len(regions)},
+            )
         if render_output_path is not None:
             render_dxf_to_png(dxf_path, render_output_path)
+        # Parse the DXF once, then assign every native Block/text record to its
+        # owning frame. Each subsequent recognition decision is frame-local.
+        for component in parsed.components:
+            component.frame_index = _frame_index(component.cad_center, regions)
+        for text in parsed.texts:
+            text.frame_index = _frame_index(text.cad_position, regions)
+
+        import ezdxf
+
+        layout = ezdxf.readfile(dxf_path).modelspace()
+        templates = load_component_templates()
+        logger.info("Drawing analysis vector template stage configured source=%s template_count=%s", dxf_path, len(templates))
+        visual_components: list = []
+        visual_texts: list = []
+        visual_audits: list[dict[str, object]] = []
+        visual_text_audits: list[dict[str, object]] = []
         visual_error: str | None = None
-        try:
-            visual_response = detect_visual_components(dxf_path, include_audit=True)
-            if isinstance(visual_response, tuple):
-                visual_components, visual_audit = visual_response
-            else:
-                # Maintains compatibility with tests and third-party adapters
-                # which implement the historical list-only function contract.
-                visual_components, visual_audit = visual_response, {}
-        except VisualDetectionError as exc:
-            visual_components = []
-            visual_audit = exc.audit
-            visual_error = str(exc)
-            logger.warning("Visual recognition skipped source=%s error=%s", path, exc)
-        except RuntimeError as exc:
-            # Vector results remain usable when an optional external model is
-            # unavailable or configured with a text-only model.
-            visual_components = []
-            visual_audit = {}
-            visual_error = str(exc)
-            logger.warning("Visual recognition skipped source=%s error=%s", path, exc)
+        visual_text_error: str | None = None
+        for frame_index, region in enumerate(regions):
+            native_component_count = sum(item.frame_index == frame_index for item in parsed.components)
+            native_text_count = sum(item.frame_index == frame_index for item in parsed.texts)
+            logger.info(
+                "Drawing analysis frame started frame=%s frame_index=%s frame_total=%s native_components=%s native_texts=%s",
+                region.name, frame_index + 1, len(regions), native_component_count, native_text_count,
+            )
+            if progress_callback:
+                progress_callback(
+                    "frame_vector_parse", 38 + round(14 * frame_index / max(len(regions), 1)),
+                    f"正在解析主图框 {frame_index + 1}/{len(regions)} 的实体、Block 和原生文字。",
+                    {"kind": "frame_vector_parse", "frame_index": frame_index, "frame_total": len(regions), "frame_name": region.name},
+                )
+            template_components = detect_template_components(
+                layout, region, frame_index, templates, progress_callback=progress_callback,
+                progress_start=40 + round(14 * frame_index / max(len(regions), 1)),
+                progress_span=max(1, round(12 / max(len(regions), 1))),
+            )
+            for candidate in template_components:
+                if not _is_duplicate_vector_candidate(candidate, parsed.components, region):
+                    parsed.components.append(candidate)
+
+            vector_components = [item for item in parsed.components if item.frame_index == frame_index]
+            # VLM is the fallback for a frame that has no reliable native Block
+            # or configured template result. This avoids unnecessary visual
+            # requests when the vector layer has already supplied evidence.
+            if vector_components:
+                logger.info(
+                    "Drawing analysis VLM fallback skipped frame=%s vector_components=%s sources=%s",
+                    region.name, len(vector_components), sorted({item.source for item in vector_components}),
+                )
+                continue
+            logger.info("Drawing analysis VLM fallback started frame=%s reason=no_reliable_vector_candidate", region.name)
+            try:
+                visual_response = detect_visual_components(
+                    dxf_path, include_audit=True, progress_callback=progress_callback,
+                    frame_contexts=[(frame_index, region)],
+                )
+                if isinstance(visual_response, tuple):
+                    frame_components, frame_audit = visual_response
+                else:
+                    frame_components, frame_audit = visual_response, {}
+                visual_components.extend(frame_components)
+                visual_audits.append(frame_audit)
+                logger.info("Drawing analysis VLM component stage completed frame=%s detections=%s", region.name, len(frame_components))
+            except VisualDetectionError as exc:
+                visual_audits.append(exc.audit)
+                visual_error = str(exc)
+                logger.warning("Visual recognition skipped source=%s frame=%s error=%s", path, region.name, exc)
+            except RuntimeError as exc:
+                visual_error = str(exc)
+                logger.warning("Visual recognition skipped source=%s frame=%s error=%s", path, region.name, exc)
+            try:
+                visual_text_response = detect_visual_texts(
+                    dxf_path, include_audit=True, progress_callback=progress_callback,
+                    frame_contexts=[(frame_index, region)],
+                )
+                if isinstance(visual_text_response, tuple):
+                    frame_texts, frame_audit = visual_text_response
+                else:
+                    frame_texts, frame_audit = visual_text_response, {}
+                visual_texts.extend(frame_texts)
+                visual_text_audits.append(frame_audit)
+                logger.info("Drawing analysis VLM text stage completed frame=%s texts=%s", region.name, len(frame_texts))
+            except VisualDetectionError as exc:
+                visual_text_audits.append(exc.audit)
+                visual_text_error = str(exc)
+                logger.warning("VLM text extraction skipped source=%s frame=%s error=%s", path, region.name, exc)
+            except RuntimeError as exc:
+                visual_text_error = str(exc)
+                logger.warning("VLM text extraction skipped source=%s frame=%s error=%s", path, region.name, exc)
         if visual_components:
             parsed.components.extend(visual_components[:max(0, max_components - len(parsed.components))])
-        visual_text_error: str | None = None
-        try:
-            visual_text_response = detect_visual_texts(dxf_path, include_audit=True)
-            if isinstance(visual_text_response, tuple):
-                visual_texts, visual_text_audit = visual_text_response
-            else:
-                visual_texts, visual_text_audit = visual_text_response, {}
-        except VisualDetectionError as exc:
-            visual_texts, visual_text_audit, visual_text_error = [], exc.audit, str(exc)
-            logger.warning("VLM text extraction skipped source=%s error=%s", path, exc)
-        except RuntimeError as exc:
-            visual_texts, visual_text_audit, visual_text_error = [], {}, str(exc)
-            logger.warning("VLM text extraction skipped source=%s error=%s", path, exc)
         parsed.texts.extend(visual_texts)
         _associate_text_per_frame(parsed, regions)
+        logger.info(
+            "Drawing analysis text association completed source=%s components=%s retained_texts=%s",
+            path, len(parsed.components), len(parsed.texts),
+        )
         result = assemble_vector_result(path, suffix, temporary_output is not None, parsed)
-        if visual_audit:
-            result.audit["visual_detection"] = visual_audit
+        result.audit["template_detection"] = {
+            "configured_template_count": len(templates),
+            "matched_component_count": sum(item.source == "template" for item in parsed.components),
+            "vlm_fallback_frame_count": len(visual_audits),
+        }
+        if visual_audits:
+            result.audit["visual_detection"] = {"frames": visual_audits}
         if visual_error:
             result.audit["limitations"].insert(
                 0,
                 f"视觉识别未执行：{visual_error} 请确认 DRAWING_VLM_MODEL_NAME 配置的是支持图片输入的模型。",
             )
-        if visual_text_audit:
-            result.audit["visual_text_extraction"] = visual_text_audit
+        if visual_text_audits:
+            result.audit["visual_text_extraction"] = {"frames": visual_text_audits}
         if visual_text_error:
             result.audit["limitations"].insert(0, f"VLM 文字提取未执行：{visual_text_error}")
         result.drawing["frames"] = [
@@ -139,15 +229,30 @@ def analyze_drawing(
         ]
         if render_output_path is not None:
             result.drawing["render_path"] = render_output_path.name
+        if render_output_dir is not None:
+            logger.info("Drawing analysis base-map rendering started source=%s output_dir=%s", dxf_path, render_output_dir)
+            base_images = render_dxf_base_maps(dxf_path, render_output_dir, progress_callback=progress_callback)
+        else:
+            base_images = []
         if base_images:
             result.drawing["base_images"] = base_images
+        logger.info(
+            "Drawing analysis completed source=%s components=%s texts=%s frames=%s",
+            path, len(result.components), len(result.texts), len(regions),
+        )
         return result
     finally:
         if temporary_output is not None:
             temporary_output.cleanup()
 
 
-def render_dxf_base_maps(dxf_path: Path, output_dir: Path, *, dpi: int = 450) -> list[dict[str, object]]:
+def render_dxf_base_maps(
+    dxf_path: Path,
+    output_dir: Path,
+    *,
+    dpi: int = 450,
+    progress_callback: ProgressCallback | None = None,
+) -> list[dict[str, object]]:
     """Persist one high-resolution PNG for every detected modelspace drawing frame."""
     import ezdxf
     from ezdxf import bbox
@@ -166,6 +271,12 @@ def render_dxf_base_maps(dxf_path: Path, output_dir: Path, *, dpi: int = 450) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     base_images: list[dict[str, object]] = []
     for index, region in enumerate(regions):
+        if progress_callback:
+            progress_callback(
+                "frame_render", 89 + round(3 * index / max(len(regions), 1)),
+                f"正在保存主图框底图 {index + 1}/{len(regions)}。",
+                {"kind": "frame_render", "frame_index": index, "frame_total": len(regions), "frame_name": region.name},
+            )
         image_path = output_dir / f"{region.name}.png"
         render_dxf_region_to_png(dxf_path, image_path, region, dpi=dpi, max_size_inches=10.0)
         with Image.open(image_path) as image:

@@ -46,7 +46,7 @@ class ComponentCandidate(BaseModel):
     value: str | None = None
     cad_center: CadPoint
     rotation_deg: float
-    source: Literal["block", "vision", "fusion"] = "block"
+    source: Literal["block", "template", "vision", "fusion"] = "block"
     confidence: float
     review_status: Literal["approved", "pending", "rejected"] = "approved"
     frame_index: int | None = None

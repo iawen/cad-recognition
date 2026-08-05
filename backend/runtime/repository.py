@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "runtime"
 DATABASE_PATH = DATA_ROOT / "recognition.db"
 UPLOAD_ROOT = DATA_ROOT / "uploads"
 RENDER_ROOT = DATA_ROOT / "renders"
+_EVENT_CONDITION = threading.Condition()
 
 
 def _now() -> str:
@@ -36,21 +38,29 @@ def initialize_repository() -> None:
             """CREATE TABLE IF NOT EXISTS recognition_runs (
                 id TEXT PRIMARY KEY, filename TEXT NOT NULL, file_path TEXT NOT NULL,
                 status TEXT NOT NULL, phase TEXT NOT NULL, progress INTEGER NOT NULL,
-                message TEXT NOT NULL, result_json TEXT, error TEXT,
+                message TEXT NOT NULL, work_json TEXT, result_json TEXT, error TEXT,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             )"""
         )
         connection.execute(
             """CREATE TABLE IF NOT EXISTS recognition_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
-                phase TEXT NOT NULL, progress INTEGER NOT NULL, message TEXT NOT NULL,
+                phase TEXT NOT NULL, progress INTEGER NOT NULL, message TEXT NOT NULL, work_json TEXT,
                 created_at TEXT NOT NULL
             )"""
         )
+        _ensure_column(connection, "recognition_runs", "work_json", "TEXT")
+        _ensure_column(connection, "recognition_events", "work_json", "TEXT")
         connection.commit()
         logger.info("Repository initialized database=%s", DATABASE_PATH)
     finally:
         connection.close()
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def create_run(filename: str, file_path: Path) -> dict[str, Any]:
@@ -69,30 +79,35 @@ def create_run(filename: str, file_path: Path) -> dict[str, Any]:
             VALUES (:id, :filename, :file_path, :status, :phase, :progress, :message, :created_at, :updated_at)""",
             record,
         )
-        _append_event(connection, run_id, "queued", 0, record["message"])
+        _append_event(connection, run_id, "queued", 0, record["message"], None)
         connection.commit()
         logger.info("Run created run_id=%s filename=%s file_path=%s", run_id, filename, file_path)
     finally:
         connection.close()
+    _notify_event_waiters()
     return record
 
 
-def _append_event(connection: sqlite3.Connection, run_id: str, phase: str, progress: int, message: str) -> None:
+def _append_event(connection: sqlite3.Connection, run_id: str, phase: str, progress: int, message: str, work: dict[str, Any] | None) -> None:
     connection.execute(
-        "INSERT INTO recognition_events (run_id, phase, progress, message, created_at) VALUES (?, ?, ?, ?, ?)",
-        (run_id, phase, progress, message, _now()),
+        "INSERT INTO recognition_events (run_id, phase, progress, message, work_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (run_id, phase, progress, message, json.dumps(work, ensure_ascii=False) if work else None, _now()),
     )
 
 
-def update_run(run_id: str, *, status: str, phase: str, progress: int, message: str, result: dict | None = None, error: str | None = None) -> None:
+def update_run(
+    run_id: str, *, status: str, phase: str, progress: int, message: str,
+    result: dict | None = None, error: str | None = None, work: dict[str, Any] | None = None,
+) -> None:
     connection = _connect()
     try:
         connection.execute(
-            """UPDATE recognition_runs SET status=?, phase=?, progress=?, message=?, result_json=?, error=?, updated_at=?
+            """UPDATE recognition_runs SET status=?, phase=?, progress=?, message=?, work_json=?, result_json=?, error=?, updated_at=?
                WHERE id=?""",
-            (status, phase, progress, message, json.dumps(result, ensure_ascii=False) if result else None, error, _now(), run_id),
+            (status, phase, progress, message, json.dumps(work, ensure_ascii=False) if work else None,
+             json.dumps(result, ensure_ascii=False) if result else None, error, _now(), run_id),
         )
-        _append_event(connection, run_id, phase, progress, message)
+        _append_event(connection, run_id, phase, progress, message, work)
         connection.commit()
         logger.info(
             "Run updated run_id=%s status=%s phase=%s progress=%s result_saved=%s error=%s",
@@ -100,6 +115,7 @@ def update_run(run_id: str, *, status: str, phase: str, progress: int, message: 
         )
     finally:
         connection.close()
+    _notify_event_waiters()
 
 
 def get_run(run_id: str) -> dict[str, Any] | None:
@@ -113,20 +129,42 @@ def get_run(run_id: str) -> dict[str, Any] | None:
         return None
     result = dict(row)
     result["result"] = json.loads(result.pop("result_json")) if result.get("result_json") else None
+    result["work"] = json.loads(result.pop("work_json")) if result.get("work_json") else None
     result.pop("file_path", None)
     logger.info("Run loaded run_id=%s status=%s phase=%s", run_id, result["status"], result["phase"])
     return result
 
 
-def list_events(run_id: str) -> list[dict[str, Any]]:
+def list_events(run_id: str, *, after_id: int = 0) -> list[dict[str, Any]]:
     connection = _connect()
     try:
         rows = connection.execute(
-            "SELECT phase, progress, message, created_at FROM recognition_events WHERE run_id=? ORDER BY id", (run_id,)
+            "SELECT id, phase, progress, message, work_json, created_at FROM recognition_events WHERE run_id=? AND id>? ORDER BY id",
+            (run_id, after_id),
         ).fetchall()
     finally:
         connection.close()
-    return [dict(row) for row in rows]
+    events = []
+    for row in rows:
+        event = dict(row)
+        event["work"] = json.loads(event.pop("work_json")) if event.get("work_json") else None
+        events.append(event)
+    return events
+
+
+def wait_for_event(run_id: str, after_id: int, timeout_seconds: float = 15.0) -> list[dict[str, Any]]:
+    """Wait for a persisted event notification, then return only new events."""
+    events = list_events(run_id, after_id=after_id)
+    if events:
+        return events
+    with _EVENT_CONDITION:
+        _EVENT_CONDITION.wait(timeout_seconds)
+    return list_events(run_id, after_id=after_id)
+
+
+def _notify_event_waiters() -> None:
+    with _EVENT_CONDITION:
+        _EVENT_CONDITION.notify_all()
 
 
 def get_run_path(run_id: str) -> Path | None:

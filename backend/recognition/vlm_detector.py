@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from recognition.component_catalog import supported_component_types
 from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
 from recognition.reference_icons import vlm_reference_images
+from tools.logger import logger
 
 SUPPORTED_COMPONENT_TYPES = supported_component_types()
 _ENABLED_VALUES = {"1", "true", "yes", "on"}
@@ -131,6 +132,10 @@ class VlmDetector:
             "component_evidence_count": len(self.component_evidence),
             "started_at_unix_ms": round(time.time() * 1000),
         }
+        logger.info(
+            "VLM component request started model=%s tile=%s reference_icons=%s timeout_seconds=%s",
+            self.model_identifier, image_path.name, len(references) // 2, self.timeout_seconds,
+        )
         started = time.perf_counter()
         try:
             request = Request(
@@ -150,13 +155,16 @@ class VlmDetector:
                 exc.close()
             provider_message = re.sub(r"\s+", " ", provider_message).strip()[:500]
             self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": f"http_{exc.code}"})
+            logger.warning("VLM component request failed model=%s tile=%s outcome=http_%s", self.model_identifier, image_path.name, exc.code)
             detail = f" 服务响应：{provider_message}" if provider_message else ""
             raise RuntimeError(f"VLM 请求失败，HTTP 状态码：{exc.code}。{detail}") from exc
         except URLError as exc:
             self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "unreachable"})
+            logger.warning("VLM component request unreachable model=%s tile=%s", self.model_identifier, image_path.name)
             raise RuntimeError("VLM 服务不可达。") from exc
         except TimeoutError as exc:
             self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "timeout"})
+            logger.warning("VLM component request timed out model=%s tile=%s timeout_seconds=%s", self.model_identifier, image_path.name, self.timeout_seconds)
             raise RuntimeError("VLM 请求超时。") from exc
 
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -166,6 +174,10 @@ class VlmDetector:
             "outcome": "ok",
             "valid_detection_count": len(detections),
         })
+        logger.info(
+            "VLM component request completed model=%s tile=%s detections=%s duration_ms=%s",
+            self.model_identifier, image_path.name, len(detections), self.last_request_metadata["duration_ms"],
+        )
         return detections
 
     def extract_texts(self, image_path: Path) -> list[VlmTextDetection]:
@@ -195,6 +207,7 @@ class VlmDetector:
             "temperature": self.temperature, "timeout_seconds": self.timeout_seconds,
             "thinking_disabled": self.disable_thinking, "started_at_unix_ms": round(time.time() * 1000),
         }
+        logger.info("VLM text request started model=%s tile=%s timeout_seconds=%s", self.model_identifier, image_path.name, self.timeout_seconds)
         started = time.perf_counter()
         try:
             request = Request(
@@ -205,16 +218,23 @@ class VlmDetector:
                 body = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": f"http_{exc.code}"})
+            logger.warning("VLM text request failed model=%s tile=%s outcome=http_%s", self.model_identifier, image_path.name, exc.code)
             raise RuntimeError(f"VLM 文字提取请求失败，HTTP 状态码：{exc.code}。") from exc
         except URLError as exc:
             self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "unreachable"})
+            logger.warning("VLM text request unreachable model=%s tile=%s", self.model_identifier, image_path.name)
             raise RuntimeError("VLM 文字提取服务不可达。") from exc
         except TimeoutError as exc:
             self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "timeout"})
+            logger.warning("VLM text request timed out model=%s tile=%s timeout_seconds=%s", self.model_identifier, image_path.name, self.timeout_seconds)
             raise RuntimeError("VLM 文字提取请求超时。") from exc
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
         texts = self._parse_texts(content, image_path)
         self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "ok", "valid_text_count": len(texts)})
+        logger.info(
+            "VLM text request completed model=%s tile=%s texts=%s duration_ms=%s",
+            self.model_identifier, image_path.name, len(texts), self.last_request_metadata["duration_ms"],
+        )
         return texts
 
     def _reference_content(self) -> list[dict[str, object]]:

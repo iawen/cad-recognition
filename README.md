@@ -48,3 +48,22 @@ npm run dev
 2. 记录可验证的代码、接口或评测证据。
 3. 将设计目标与已验证性能结论分开表述。
 4. 若历史报告中的建议被采纳、推迟或排除，应更新主方案，而不是把历史报告改为实施承诺。
+
+
+## 验证脚本
+```bash
+uv run python -m tools.split_dxf_frames ..\data\B电气图_CAD.dxf ..\data\B电气图_CAD_主图框拆分验证 --dpi 450 --overwrite
+uv run python -m tools.split_dxf_frames ..\data\电气设备.dxf ..\data\电气设备_主图框拆分验证 --dpi 450 --overwrite
+
+uv run python -m tools.match_dxf_component_templates ^
+  ..\data\B电气图_CAD.dxf ^
+  ..\data\B电气图_CAD_元器件匹配结果.json ^
+  ..\data\01.dxf ^
+  ..\data\02.dxf
+
+uv run python -m tools.match_dxf_component_templates ^
+  ..\data\电气设备.dxf ^
+  ..\data\电气设备_元器件匹配结果.json ^
+  ..\data\01.dxf ^
+  ..\data\02.dxf
+```

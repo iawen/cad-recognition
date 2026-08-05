@@ -135,7 +135,13 @@ def _rectangles_from_segmented_polylines(
     return rectangles
 
 
-def detect_drawing_regions(layout: Any, *, max_regions: int = 8) -> list[DrawingRegion]:
+def _is_title_frame_layer(layer: str) -> bool:
+    """Return whether a layer name commonly stores title blocks or sheet frames."""
+    normalized = layer.casefold()
+    return "title" in normalized or "图框" in layer or "标题栏" in layer
+
+
+def detect_drawing_regions(layout: Any, *, max_regions: int = 32) -> list[DrawingRegion]:
     """Return large non-overlapping rectangular frames, ordered top-left to bottom-right.
 
     Prefer explicit closed LWPOLYLINE frames, then recover frames assembled from
@@ -151,6 +157,11 @@ def detect_drawing_regions(layout: Any, *, max_regions: int = 8) -> list[Drawing
         return []
     min_width, min_height = drawing_width * 0.18, drawing_height * 0.18
     min_area = drawing_width * drawing_height * 0.04
+    # Civil/site drawings can contain many sheets arranged over a very large
+    # coordinate range. In that case an individual sheet may be smaller than
+    # the global 18% threshold even though its title-frame rectangle is clear.
+    title_min_width, title_min_height = drawing_width * 0.08, drawing_height * 0.08
+    title_min_area = drawing_width * drawing_height * 0.008
     tolerance = max(drawing_width, drawing_height, 1.0) * 1e-6
     candidates: list[DrawingRegion] = []
     for entity in layout:
@@ -159,7 +170,13 @@ def detect_drawing_regions(layout: Any, *, max_regions: int = 8) -> list[Drawing
             continue
         min_x, min_y, max_x, max_y = rectangle
         region = DrawingRegion("", min_x, min_y, max_x, max_y)
-        if region.width >= min_width and region.height >= min_height and region.area >= min_area:
+        is_title_frame = _is_title_frame_layer(entity.dxf.layer or "0")
+        meets_general_threshold = region.width >= min_width and region.height >= min_height and region.area >= min_area
+        meets_title_threshold = (
+            is_title_frame and region.width >= title_min_width and region.height >= title_min_height
+            and region.area >= title_min_area
+        )
+        if meets_general_threshold or meets_title_threshold:
             candidates.append(region)
     for min_x, min_y, max_x, max_y in _rectangles_from_segmented_polylines(
         layout, min_width=min_width, min_height=min_height, tolerance=tolerance,

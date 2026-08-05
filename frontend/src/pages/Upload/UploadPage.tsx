@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Upload, Button, Card, Table, Tag, Progress, message, Space, Typography } from 'antd';
 import { InboxOutlined, FileOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { UploadProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { uploadFile } from '../../api/upload';
-import { getTaskStatus } from '../../api/recognition';
+import { streamTaskProgress } from '../../api/recognition';
 import { UploadTask } from '../../types/upload';
 
 const { Dragger } = Upload;
@@ -15,6 +15,9 @@ export default function UploadPage() {
   const navigate = useNavigate();
   const [uploading, setUploading] = useState(false);
   const [taskList, setTaskList] = useState<UploadTask[]>([]);
+  const streams = useRef(new Map<string, EventSource>());
+
+  useEffect(() => () => streams.current.forEach((source) => source.close()), []);
 
   // 从 localStorage 加载历史任务
   useEffect(() => {
@@ -33,23 +36,24 @@ export default function UploadPage() {
     localStorage.setItem('cad_task_history', JSON.stringify(tasks));
   }, []);
 
-  /** 轮询任务状态 */
-  const pollTaskStatus = useCallback(
+  /** 接收服务器主动推送的任务状态。 */
+  const streamTaskStatus = useCallback(
     (taskId: string, fileName: string, fileSize: number) => {
-      const interval = setInterval(async () => {
-        try {
-          const res = await getTaskStatus(taskId);
+      const source = streamTaskProgress(
+        taskId,
+        ({ task: streamedTask }) => {
           const task: UploadTask = {
             taskId,
             fileName,
             fileSize,
-            status: res.data.status as UploadTask['status'],
-            progress: res.data.progress,
-            createdAt: res.data.createdAt,
-            completedAt: res.data.completedAt,
+            status: streamedTask.status as UploadTask['status'],
+            progress: streamedTask.progress,
+            createdAt: streamedTask.createdAt,
+            completedAt: streamedTask.completedAt,
+            message: streamedTask.message,
+            currentWork: streamedTask.currentWork,
           };
 
-          // 更新任务列表
           setTaskList((prev) => {
             const idx = prev.findIndex((t) => t.taskId === taskId);
             const updated =
@@ -61,7 +65,8 @@ export default function UploadPage() {
           });
 
           if (task.status === 'completed' || task.status === 'failed') {
-            clearInterval(interval);
+            source.close();
+            streams.current.delete(taskId);
             setUploading(false);
             if (task.status === 'completed') {
               message.success('识别完成！');
@@ -70,11 +75,14 @@ export default function UploadPage() {
               message.error('识别失败，请重试');
             }
           }
-        } catch {
-          clearInterval(interval);
+        },
+        () => {
+          source.close();
+          streams.current.delete(taskId);
           setUploading(false);
         }
-      }, 2000);
+      );
+      streams.current.set(taskId, source);
     },
     [navigate]
   );
@@ -105,12 +113,22 @@ export default function UploadPage() {
         ...taskList,
       ]);
 
-      // 开始轮询
-      pollTaskStatus(taskId, file.name, file.size);
+      // 服务端主动推送识别进度与当前工作。
+      streamTaskStatus(taskId, file.name, file.size);
     } catch {
       options.onError?.(new Error('上传失败'));
       setUploading(false);
     }
+  };
+
+  const describeWork = (task: UploadTask) => {
+    const work = task.currentWork;
+    if (work?.kind === 'template_match') return `模板 ${work.template_index! + 1}/${work.template_total}: ${work.template_name}`;
+    if (work?.kind === 'frame_vector_parse') return `正在解析主图框 ${work.frame_index! + 1}/${work.frame_total}`;
+    if (work?.kind === 'frame_render') return `正在保存主图框 ${work.frame_index! + 1}/${work.frame_total} 的底图`;
+    if (work?.tile_index !== undefined) return `主图框 ${work.frame_index! + 1}/${work.frame_total}，区域 ${work.tile_index + 1}/${work.tile_total}`;
+    if (work?.frame_index !== undefined) return `主图框 ${work.frame_index + 1}/${work.frame_total}`;
+    return task.message || '等待识别任务开始';
   };
 
   const columns: ColumnsType<UploadTask> = [
@@ -160,6 +178,11 @@ export default function UploadPage() {
       },
     },
     {
+      title: '当前工作',
+      key: 'currentWork',
+      render: (_: unknown, record: UploadTask) => <Text type="secondary">{describeWork(record)}</Text>,
+    },
+    {
       title: '操作',
       key: 'action',
       width: 120,
@@ -198,7 +221,7 @@ export default function UploadPage() {
         {uploading && (
           <div style={{ textAlign: 'center', marginTop: 16 }}>
             <Progress percent={99} status="active" />
-            <Text type="secondary">文件上传中，请稍候...</Text>
+            <Text type="secondary">文件上传成功，正在等待识别任务推送...</Text>
           </div>
         )}
       </Card>

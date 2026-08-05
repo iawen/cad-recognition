@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "description": "人工维护的元器件视觉判断依据。每类先满足 visual_cues，再以 label_patterns 和图纸位置作辅助；任何文字、位置或单一线段都不可单独产生检测。编辑时优先补充本项目真实图纸中已人工确认的变体。",
+  "components": {
+    "circuit_breaker": {
+      "label_patterns": ["QF\\d+", "CB\\d+"],
+      "visual_cues": ["开断触点或斜触点", "触点附近的叉号或灭弧标记", "串接在主回路中"],
+      "confusion_notes": "不要仅凭 QF 标签判定；须同时看到与断路器参考图一致的开断结构。不要把隔离开关或熔断器识别为断路器。"
+    },
+    "current_transformer": {
+      "label_patterns": ["TA\\d+", "CT\\d+", "电流互感器"],
+      "visual_cues": ["一次导线穿过的单个圆形或环形互感器符号", "二次侧引出至电流表、计量或保护回路", "三相场景可沿同一回路重复出现三个单元"],
+      "confusion_notes": "不要把圆圈 A 的电流表、电压互感器或包围多根相线的零序电流互感器识别为电流互感器。"
+    },
+    "voltage_transformer": {
+      "label_patterns": ["TV\\d+", "PT\\d+", "电压互感器"],
+      "visual_cues": ["具有一次侧和二次侧绕组/变压器结构", "一次侧通常从母线或主回路并联取压", "二次侧可接电压表、计量或保护回路"],
+      "confusion_notes": "不要仅因附近有圆圈 V、电压单位或普通变压器图形就判为电压互感器。"
+    },
+    "surge_arrester": {
+      "label_patterns": ["YH\\d+", "SA\\d+", "避雷器"],
+      "visual_cues": ["从主回路或设备端分支引下", "支路末端明确接地", "支路中具有避雷器本体而非可动触点"],
+      "confusion_notes": "不要把可动触点接地的接地开关、普通接地符号或带电显示支路识别为避雷器。"
+    },
+    "fuse": {
+      "label_patterns": ["FU\\d+", "熔断器"],
+      "visual_cues": ["主回路或支路中串联的熔断器专用符号", "符号两端连续接入同一导线"],
+      "confusion_notes": "不要将矩形仪表、端子、普通方框或带斜触点/叉号的断路器识别为熔断器。"
+    },
+    "zero_sequence_current_transformer": {
+      "label_patterns": ["TA0\\d+", "ZCT\\d+", "零序"],
+      "visual_cues": ["一个环形互感器同时包围三相导线或多根导线", "二次侧通向零序保护/接地故障回路"],
+      "confusion_notes": "必须看到同一环包含多根相线或明确零序语境；不要把普通单相电流互感器识别为零序电流互感器。"
+    },
+    "live_line_indicator": {
+      "label_patterns": ["带电显示", "带电显示器", "VPIS"],
+      "visual_cues": ["从三相母线或电缆侧引出的小型带电指示装置", "常见三相采样连接和指示单元组合"],
+      "confusion_notes": "不要将普通指示灯、单个圆形仪表、文字说明或避雷器支路识别为带电显示器。"
+    },
+    "earthing_switch": {
+      "label_patterns": ["ES\\d+", "QES\\d+", "接地开关"],
+      "visual_cues": ["可动开关触点从主导线明确接向接地符号", "断开状态下仍可辨识触点和接地端的连接关系"],
+      "confusion_notes": "必须有明确接地支路；不要把普通隔离开关（常见 QS 位号）或带叉号的断路器识别为接地开关。"
+    },
+    "ammeter": {
+      "label_patterns": ["圆圈 A", "PA\\d+", "电流表"],
+      "visual_cues": ["圆圈内清晰字母 A", "位于电流互感器二次计量或测量回路"],
+      "confusion_notes": "仅识别完整的圆圈 A；不要从单位 A、三相标注 3×A、裸露字母或模糊文字推断。"
+    },
+    "voltmeter": {
+      "label_patterns": ["圆圈 V", "PV\\d+", "电压表"],
+      "visual_cues": ["圆圈内清晰字母 V", "从电压互感器二次或电压测量回路并接"],
+      "confusion_notes": "仅识别完整的圆圈 V；不要从 kV、V 单位、裸露字母或模糊文字推断。"
+    },
+    "thermal_relay": {
+      "label_patterns": ["FR\\d+", "热继电器"],
+      "visual_cues": ["热元件/过载继电器专用符号或触点组合", "通常串接在电动机控制或保护回路并与接触器相邻"],
+      "confusion_notes": "不要将普通继电器线圈、辅助触点或任意标有 FR 的文字直接分类为热继电器。"
+    },
+    "contactor": {
+      "label_patterns": ["KM\\d+", "接触器"],
+      "visual_cues": ["接触器线圈与成组主/辅助触点的对应关系", "常出现在电动机或控制回路"],
+      "confusion_notes": "不要仅凭 KM 标签、单个普通触点或继电器线圈判定；须看到接触器结构或清晰的控制回路语境。"
+    },
+    "capacitor": {
+      "label_patterns": ["C\\d+", "CAP\\d+", "电容器"],
+      "visual_cues": ["两片彼此分离且平行的电容极板", "极板两侧分别与导线相连", "单个单元而非完整三相成组结构"],
+      "confusion_notes": "不要把断开触点、平行导线、文字框或三相成组电容器整体识别为单个电容器。"
+    },
+    "three_phase_shunt_capacitor_bank": {
+      "label_patterns": ["BC\\d+", "电容器组", "无功补偿"],
+      "visual_cues": ["三个或多个电容单元构成可识别的三相组", "成组并联于母线或无功补偿支路"],
+      "confusion_notes": "需要看到完整成组三相结构；不要把单个电容器、普通三相负载或仅有 C 位号的局部图形分类为电容器组。"
+    },
+    "transformer": {
+      "label_patterns": ["T\\d+", "TR\\d+", "变压器", "变比", "Dyn", "Yyn"],
+      "visual_cues": ["相邻绕组、双圆或主变压器符号", "一次和二次主回路分别接入", "可伴随变比、容量或接线组别"],
+      "confusion_notes": "T 位号本身过于宽泛；不要把电流互感器、电压互感器、单个圆形仪表或仅有文字的设备说明分类为主变压器。"
+    }
+  }
+}

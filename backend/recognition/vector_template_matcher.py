@@ -1,16 +1,15 @@
 """Tolerance-aware vector template matching for exploded electrical symbols.
 
-This POC deliberately compares DXF geometry, not raster images. It supports the
-LINE and straight LWPOLYLINE primitives present in the supplied circuit-breaker
-reference and in the flattened target drawing. HATCH entities are ignored: the
-same contours already occur as LWPOLYLINE boundaries and would otherwise create
-duplicate evidence.
+This POC deliberately compares DXF geometry, not raster images. It supports
+straight edges plus CIRCLE/ARC primitives normalized into short chord edges.
+HATCH entities are ignored: the same contours already occur as LWPOLYLINE
+boundaries and would otherwise create duplicate evidence.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import atan2, cos, hypot, sin
+from math import atan2, ceil, cos, hypot, pi, sin
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,6 +30,23 @@ class Segment:
     @property
     def angle(self) -> float:
         return atan2(self.end_y - self.start_y, self.end_x - self.start_x)
+
+
+@dataclass(frozen=True)
+class Circle:
+    """One DXF circle represented by a CAD centre and radius."""
+
+    center_x: float
+    center_y: float
+    radius: float
+
+
+@dataclass(frozen=True)
+class VectorGeometry:
+    """Flattened DXF geometry that can participate in template matching."""
+
+    segments: list[Segment]
+    circles: list[Circle]
 
 
 @dataclass(frozen=True)
@@ -56,16 +72,72 @@ def _points(entity: Any) -> list[tuple[float, float]]:
     return [(float(point[0]), float(point[1])) for point in entity.get_points("xy")]
 
 
-def segments_from_layout(layout: Iterable[Any]) -> list[Segment]:
-    """Extract non-zero straight LINE/LWPOLYLINE edges from a DXF layout."""
+def _arc_chords(
+    center_x: float,
+    center_y: float,
+    radius: float,
+    start_angle_deg: float,
+    end_angle_deg: float,
+    *,
+    full_circle: bool = False,
+) -> list[Segment]:
+    """Approximate an ARC/CIRCLE with scale-invariant chord topology."""
+    span = 2 * pi if full_circle else (end_angle_deg - start_angle_deg) % 360 * pi / 180
+    if radius <= 1e-9 or span <= 1e-9:
+        return []
+    start = start_angle_deg * pi / 180
+    # Fixed angular resolution keeps template/target topology identical across scale.
+    steps = max(4, int(ceil(span / (pi / 8))))
+    points = [
+        (center_x + radius * cos(start + span * index / steps), center_y + radius * sin(start + span * index / steps))
+        for index in range(steps + 1)
+    ]
+    return [Segment(*start_point, *end_point) for start_point, end_point in zip(points, points[1:])]
+
+
+def _flatten_entities(entities: Iterable[Any]) -> Iterable[Any]:
+    """Yield modelspace entities and virtual entities expanded from INSERT blocks."""
+    for entity in entities:
+        if entity.dxftype() != "INSERT":
+            yield entity
+            continue
+        try:
+            virtual_entities = entity.virtual_entities()
+        except (AttributeError, TypeError):
+            continue
+        yield from _flatten_entities(virtual_entities)
+
+
+def geometry_from_layout(layout: Iterable[Any]) -> VectorGeometry:
+    """Extract straight edges and circles, recursively expanding INSERT blocks.
+
+    HATCH is deliberately ignored because it commonly duplicates polyline
+    boundaries. Curves are converted to chord edges, preserving their position,
+    radius and angular topology under the matcher's uniform transform.
+    """
     segments: list[Segment] = []
-    for entity in layout:
+    circles: list[Circle] = []
+    for entity in _flatten_entities(layout):
         entity_type = entity.dxftype()
         if entity_type == "LINE":
             start, end = entity.dxf.start, entity.dxf.end
             candidate = Segment(float(start.x), float(start.y), float(end.x), float(end.y))
             if candidate.length > 1e-9:
                 segments.append(candidate)
+            continue
+        if entity_type == "CIRCLE":
+            center = entity.dxf.center
+            radius = float(entity.dxf.radius)
+            if radius > 1e-9:
+                circles.append(Circle(float(center.x), float(center.y), radius))
+                segments.extend(_arc_chords(float(center.x), float(center.y), radius, 0, 360, full_circle=True))
+            continue
+        if entity_type == "ARC":
+            center = entity.dxf.center
+            segments.extend(_arc_chords(
+                float(center.x), float(center.y), float(entity.dxf.radius),
+                float(entity.dxf.start_angle), float(entity.dxf.end_angle),
+            ))
             continue
         if entity_type != "LWPOLYLINE":
             continue
@@ -79,14 +151,64 @@ def segments_from_layout(layout: Iterable[Any]) -> list[Segment]:
             candidate = Segment(start[0], start[1], end[0], end[1])
             if candidate.length > 1e-9:
                 segments.append(candidate)
-    return segments
+    return VectorGeometry(segments=segments, circles=circles)
+
+
+def segments_from_layout(layout: Iterable[Any]) -> list[Segment]:
+    """Compatibility helper returning the straight subset of flattened geometry."""
+    return geometry_from_layout(layout).segments
+
+
+def geometry_from_dxf(path: Path) -> VectorGeometry:
+    """Read flattened matching geometry from a DXF modelspace."""
+    import ezdxf
+
+    return geometry_from_layout(ezdxf.readfile(path).modelspace())
 
 
 def segments_from_dxf(path: Path) -> list[Segment]:
     """Read usable straight geometry from a DXF modelspace."""
-    import ezdxf
+    return geometry_from_dxf(path).segments
 
-    return segments_from_layout(ezdxf.readfile(path).modelspace())
+
+def infer_scale_candidates(template: list[Segment], target: list[Segment]) -> list[float]:
+    """Return scale candidates implied by target edges and the template anchor."""
+    if not template:
+        return []
+    anchor_length = max(item.length for item in template)
+    if anchor_length <= 1e-9:
+        return []
+    return sorted(item.length / anchor_length for item in target if item.length > 1e-9)
+
+
+def automatic_scale_upper_bound(template: list[Segment], target: list[Segment]) -> float | None:
+    """Infer a safe upper scale bound while excluding oversized sheet borders.
+
+    Electrical symbols are normally composed of short-to-medium edges. A small
+    number of title-frame or page-border edges can be hundreds of times longer
+    and would otherwise make the endpoint tolerance and grid search explode.
+    The bound is data-derived: 20 times the target median edge length.
+    """
+    if not template or not target:
+        return None
+    anchor_length = max(item.length for item in template)
+    lengths = sorted(item.length for item in target if item.length > 1e-9)
+    if anchor_length <= 1e-9 or not lengths:
+        return None
+    median_length = lengths[len(lengths) // 2]
+    return 20 * median_length / anchor_length
+
+
+def automatic_scale_lower_bound(template: list[Segment], endpoint_tolerance: float) -> float | None:
+    """Return the smallest scale whose anchor remains spatially distinguishable."""
+    if not template:
+        return None
+    anchor_length = max(item.length for item in template)
+    if anchor_length <= 1e-9:
+        return None
+    # Below this point every template edge falls within the endpoint tolerance
+    # and can collapse into an unrelated zero-length drawing artifact.
+    return 4 * endpoint_tolerance / anchor_length
 
 
 def _transform_point(x: float, y: float, *, scale: float, cosine: float, sine: float, offset_x: float, offset_y: float) -> tuple[float, float]:
@@ -158,12 +280,33 @@ def _matched_geometry(
     return len(errors), sum(errors) / len(errors) if errors else float("inf")
 
 
+def _has_matching_segment(
+    template_segment: Segment,
+    target: list[Segment],
+    endpoint_index: dict[tuple[int, int], list[int]],
+    *,
+    scale: float,
+    cosine: float,
+    sine: float,
+    offset_x: float,
+    offset_y: float,
+    cell_size: float,
+    tolerance: float,
+) -> bool:
+    start_x, start_y = _transform_point(template_segment.start_x, template_segment.start_y, scale=scale, cosine=cosine, sine=sine, offset_x=offset_x, offset_y=offset_y)
+    end_x, end_y = _transform_point(template_segment.end_x, template_segment.end_y, scale=scale, cosine=cosine, sine=sine, offset_x=offset_x, offset_y=offset_y)
+    expected = Segment(start_x, start_y, end_x, end_y)
+    candidates = _nearby_segments(endpoint_index, start_x, start_y, cell_size=cell_size, tolerance=tolerance)
+    candidates.update(_nearby_segments(endpoint_index, end_x, end_y, cell_size=cell_size, tolerance=tolerance))
+    return any(_segment_error(expected, target[index]) <= tolerance for index in candidates)
+
+
 def match_template(
     template: list[Segment],
     target: list[Segment],
     *,
-    min_scale: float = 0.02,
-    max_scale: float = 2.0,
+    min_scale: float | None = 0.02,
+    max_scale: float | None = 2.0,
     endpoint_tolerance: float = 0.02,
     min_matched_segments: int | None = None,
 ) -> list[VectorTemplateMatch]:
@@ -172,7 +315,8 @@ def match_template(
     A longest template edge is aligned with each plausible target edge. Every
     remaining template edge must then be found in a local endpoint index. This
     makes the result invariant to translation, rotation, and uniform scale while
-    rejecting a one-line-only coincidence.
+    rejecting a one-line-only coincidence. Passing ``None`` for both scale
+    bounds evaluates every scale implied by target anchor edges.
     """
     if len(template) < 2 or not target:
         return []
@@ -180,15 +324,21 @@ def match_template(
     if anchor.length <= 1e-9:
         return []
     minimum = min_matched_segments or max(3, len(template) - 1)
-    cell_size = endpoint_tolerance
+    automatic_min_scale = automatic_scale_lower_bound(template, endpoint_tolerance) if min_scale is None else min_scale
+    automatic_max_scale = automatic_scale_upper_bound(template, target) if max_scale is None else max_scale
+    # A cell size tied to actual drawing geometry prevents a scale-derived
+    # tolerance from iterating through millions of empty 0.02-unit cells.
+    target_lengths = sorted(item.length for item in target if item.length > 1e-9)
+    cell_size = max(endpoint_tolerance, target_lengths[len(target_lengths) // 2] if target_lengths else endpoint_tolerance)
     endpoint_index = _endpoint_index(target, cell_size=cell_size)
     template_center_x = sum((item.start_x + item.end_x) / 2 for item in template) / len(template)
     template_center_y = sum((item.start_y + item.end_y) / 2 for item in template) / len(template)
     matches: list[VectorTemplateMatch] = []
+    verification_segment = next((item for item in sorted(template, key=lambda item: item.length, reverse=True) if item != anchor), None)
 
     for candidate in target:
         scale = candidate.length / anchor.length
-        if not min_scale <= scale <= max_scale:
+        if (automatic_min_scale is not None and scale < automatic_min_scale) or (automatic_max_scale is not None and scale > automatic_max_scale):
             continue
         for reversed_target in (False, True):
             target_start_x, target_start_y = (candidate.end_x, candidate.end_y) if reversed_target else (candidate.start_x, candidate.start_y)
@@ -198,6 +348,12 @@ def match_template(
             transformed_anchor_x, transformed_anchor_y = _transform_point(anchor.start_x, anchor.start_y, scale=scale, cosine=cosine, sine=sine, offset_x=0.0, offset_y=0.0)
             offset_x, offset_y = target_start_x - transformed_anchor_x, target_start_y - transformed_anchor_y
             tolerance = max(endpoint_tolerance, scale * 0.03)
+            if verification_segment is not None and not _has_matching_segment(
+                verification_segment, target, endpoint_index,
+                scale=scale, cosine=cosine, sine=sine, offset_x=offset_x, offset_y=offset_y,
+                cell_size=cell_size, tolerance=tolerance,
+            ):
+                continue
             matched_segments, mean_error = _matched_geometry(
                 template, target, endpoint_index, scale=scale, cosine=cosine, sine=sine,
                 offset_x=offset_x, offset_y=offset_y, cell_size=cell_size, tolerance=tolerance,

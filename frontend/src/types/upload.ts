@@ -10,4 +10,6 @@ export interface UploadTask {
   progress: number;
   createdAt: string;
   completedAt?: string;
+  message?: string;
+  currentWork?: import('./recognition').RecognitionWork;
 }

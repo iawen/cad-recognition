@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,15 +23,17 @@ from rendering.tiling import create_tiles
 from recognition.vlm_detector import VlmDetector
 from recognition.vlm_detector import VlmDetection
 from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
-from recognition.vector_template_matcher import Segment, match_template
+from recognition.vector_template_matcher import Segment, match_template, segments_from_dxf
 from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
 from recognition.component_catalog import COMPONENT_CATALOG
 from recognition.reference_icons import extract_excel_reference_icons, reference_icon_summary
-from runtime.repository import create_run, update_run
+from runtime.repository import create_run, get_run, list_events, update_run
 from runtime.worker import _run_analysis
 from service import analyze_drawing, render_dxf_base_maps
 from ingest.dwg_converter import convert_dwg_to_dxf
 from tools.vlm_capacitor_probe import _prepare_crop
+from tools.split_dxf_frames import split_dxf_frames
+from tools.match_dxf_component_templates import match_component_templates
 
 
 class P0ToP2RegressionTests(unittest.TestCase):
@@ -89,6 +92,42 @@ class P0ToP2RegressionTests(unittest.TestCase):
             tiles = create_tiles(image, root / "tiles", tile_size=256, overlap=32)
         self.assertTrue(tiles)
 
+    def test_repository_persists_structured_current_work(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            drawing = self._create_dxf(Path(temp_dir))
+            run = create_run(drawing.name, drawing)
+            work = {
+                "kind": "vlm_component_tile", "frame_index": 0, "frame_total": 2,
+                "tile_index": 2, "tile_total": 8, "tile_name": "tile_003.png",
+            }
+            update_run(
+                run["id"], status="running", phase="vlm_components", progress=54,
+                message="正在识别主图框 1/2 的元器件区域 3/8。", work=work,
+            )
+            persisted = get_run(run["id"])
+            events = list_events(run["id"])
+
+        self.assertEqual(persisted["work"], work)
+        self.assertEqual(events[-1]["work"], work)
+        self.assertGreater(events[-1]["id"], 0)
+
+    def test_task_stream_emits_frontend_snapshot_and_work_event(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_source = Path(temp_dir) / "missing.dxf"
+            run = create_run("missing.dxf", missing_source)
+            work = {"kind": "vlm_text_tile", "frame_index": 0, "frame_total": 1, "tile_index": 1, "tile_total": 4}
+            update_run(
+                run["id"], status="succeeded", phase="done", progress=100,
+                message="图纸识别完成。", work=work,
+            )
+            app = FastAPI()
+            app.include_router(router)
+            response = TestClient(app).get(f"/api/drawing-recognition/runs/{run['id']}/stream")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: progress", response.text)
+        self.assertIn('"currentWork": {"kind": "vlm_text_tile"', response.text)
+
     def test_vector_template_matcher_finds_scaled_rotated_symbol(self):
         template = [
             Segment(0, 0, 0, 10),
@@ -112,6 +151,145 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual(matches[0].template_segments, 4)
         self.assertAlmostEqual(matches[0].scale, 0.1)
         self.assertAlmostEqual(matches[0].rotation_deg, 90.0)
+
+    def test_per_frame_template_match_precedes_vlm_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "breaker.dxf"
+            template_document = ezdxf.new("R2018")
+            template_layout = template_document.modelspace()
+            template_layout.add_line((0, 0), (0, 10))
+            template_layout.add_line((-5, 10), (0, 20))
+            template_layout.add_line((0, 20), (0, 30))
+            template_document.saveas(template_path)
+            manifest_path = root / "templates.json"
+            manifest_path.write_text(json.dumps({"templates": [{
+                "component_type": "circuit_breaker", "path": "breaker.dxf", "min_confidence": 0.9,
+            }]}), encoding="utf-8")
+
+            drawing = root / "frames.dxf"
+            document = ezdxf.new("R2018")
+            layout = document.modelspace()
+            for x_offset in (0, 100):
+                layout.add_lwpolyline(
+                    [(x_offset, 0), (x_offset + 80, 0), (x_offset + 80, 40), (x_offset, 40)], close=True,
+                )
+            layout.add_line((10, 5), (10, 15))
+            layout.add_line((5, 15), (10, 25))
+            layout.add_line((10, 25), (10, 35))
+            document.saveas(drawing)
+
+            component_detector = Mock(return_value=([], {"enabled": True}))
+            text_detector = Mock(return_value=([], {"enabled": True}))
+            progress_events: list[tuple[str, dict]] = []
+            with (
+                patch.dict("os.environ", {"DRAWING_TEMPLATE_MANIFEST": str(manifest_path)}),
+                patch("service.detect_visual_components", component_detector),
+                patch("service.detect_visual_texts", text_detector),
+            ):
+                result = analyze_drawing(
+                    drawing,
+                    progress_callback=lambda phase, _progress, _message, work: progress_events.append((phase, work)),
+                )
+
+        self.assertEqual(result.summary["template_component_count"], 1)
+        self.assertEqual(component_detector.call_count, 1)
+        self.assertEqual(text_detector.call_count, 1)
+        self.assertEqual(component_detector.call_args.kwargs["frame_contexts"][0][0], 1)
+        self.assertTrue(any(phase == "template_match" for phase, _work in progress_events))
+
+    def test_component_template_script_reports_multiple_cad_locations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "circuit_breaker.dxf"
+            template_document = ezdxf.new("R2018")
+            template_layout = template_document.modelspace()
+            template_layout.add_line((0, 0), (0, 10))
+            template_layout.add_line((-5, 10), (0, 20))
+            template_layout.add_line((0, 20), (0, 30))
+            template_layout.add_line((-1, 19), (1, 21))
+            template_document.saveas(template_path)
+
+            main_path = root / "main.dxf"
+            main_document = ezdxf.new("R2018")
+            main_layout = main_document.modelspace()
+            # Two copies of the template, each rotated 90 degrees and scaled by 0.1.
+            for x_offset, y_offset in ((100, 50), (200, 80)):
+                main_layout.add_line((x_offset, y_offset), (x_offset - 1, y_offset))
+                main_layout.add_line((x_offset - 1, y_offset - 0.5), (x_offset - 2, y_offset))
+                main_layout.add_line((x_offset - 2, y_offset), (x_offset - 3, y_offset))
+                main_layout.add_line((x_offset - 1.9, y_offset - 0.1), (x_offset - 2.1, y_offset + 0.1))
+            main_document.saveas(main_path)
+
+            report = match_component_templates(
+                main_path, [template_path], endpoint_tolerance=0.01, min_confidence=0.9,
+            )
+
+        self.assertEqual(report["total_accepted_match_count"], 2)
+        self.assertEqual(report["templates"][0]["component_name"], "circuit_breaker")
+        self.assertTrue(all(match["confidence"] >= 0.9 for match in report["templates"][0]["matches"]))
+
+    def test_component_template_script_expands_insert_and_auto_scales(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "symbol.dxf"
+            template_document = ezdxf.new("R2018")
+            template_document.modelspace().add_line((0, 0), (0, 10))
+            template_document.modelspace().add_line((-5, 10), (0, 20))
+            template_document.modelspace().add_line((0, 20), (0, 30))
+            template_document.saveas(template_path)
+
+            main_path = root / "main-insert.dxf"
+            main_document = ezdxf.new("R2018")
+            block = main_document.blocks.new("SYMBOL")
+            block.add_line((0, 0), (0, 10))
+            block.add_line((-5, 10), (0, 20))
+            block.add_line((0, 20), (0, 30))
+            main_document.modelspace().add_blockref("SYMBOL", (100, 50), dxfattribs={"xscale": 0.1, "yscale": 0.1, "rotation": 90})
+            main_document.saveas(main_path)
+
+            report = match_component_templates(main_path, [template_path], endpoint_tolerance=0.01, min_confidence=0.9)
+
+        self.assertEqual(report["settings"]["scale_mode"], "automatic")
+        self.assertGreater(report["target_segment_count"], 0)
+        self.assertEqual(report["total_accepted_match_count"], 1)
+        self.assertGreater(report["templates"][0]["matches"][0]["scale"], 0.01)
+
+    def test_vector_template_matcher_matches_scaled_circles(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "circle-template.dxf"
+            template_document = ezdxf.new("R2018")
+            template_document.modelspace().add_circle((0, 0), 10)
+            template_document.saveas(template_path)
+
+            target_path = root / "circle-target.dxf"
+            target_document = ezdxf.new("R2018")
+            target_document.modelspace().add_circle((100, 50), 1)
+            target_document.saveas(target_path)
+
+            matches = match_template(segments_from_dxf(template_path), segments_from_dxf(target_path), min_scale=None, max_scale=None, endpoint_tolerance=0.01)
+
+        self.assertEqual(len(matches), 1)
+        self.assertAlmostEqual(matches[0].scale, 0.1)
+
+    def test_vector_template_matcher_matches_scaled_arcs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "arc-template.dxf"
+            template_document = ezdxf.new("R2018")
+            template_document.modelspace().add_arc((0, 0), 10, 0, 90)
+            template_document.saveas(template_path)
+
+            target_path = root / "arc-target.dxf"
+            target_document = ezdxf.new("R2018")
+            target_document.modelspace().add_arc((100, 50), 1, 0, 90)
+            target_document.saveas(target_path)
+
+            matches = match_template(segments_from_dxf(template_path), segments_from_dxf(target_path), min_scale=None, max_scale=None, endpoint_tolerance=0.01)
+
+        self.assertEqual(len(matches), 1)
+        self.assertAlmostEqual(matches[0].scale, 0.1)
 
     def test_realdwg_environment_switch_selects_sidecar(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -144,6 +322,49 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertEqual(regions[0].name, "region_01")
         self.assertEqual((regions[0].min_x, regions[0].min_y), (0.0, 60.0))
         self.assertEqual((regions[-1].min_x, regions[-1].min_y), (100.0, 0.0))
+
+    def test_detects_title_layer_frames_in_large_modelspace(self):
+        document = ezdxf.new("R2018")
+        layout = document.modelspace()
+        # Two 105 x 59 sheets within a 793 x 435 site-wide modelspace. The
+        # normal global 18% threshold rejects them; TEL_TITLE should retain
+        # their outer rectangles and suppress the nested inner borders.
+        for origin_x in (0, 150):
+            layout.add_lwpolyline(
+                [(origin_x, 300), (origin_x + 105, 300), (origin_x + 105, 359), (origin_x, 359)],
+                close=True, dxfattribs={"layer": "TEL_TITLE"},
+            )
+            layout.add_lwpolyline(
+                [(origin_x + 2, 301), (origin_x + 103, 301), (origin_x + 103, 358), (origin_x + 2, 358)],
+                close=True, dxfattribs={"layer": "TEL_TITLE"},
+            )
+        layout.add_line((0, 0), (793, 435))
+
+        regions = detect_drawing_regions(layout)
+
+        self.assertEqual(len(regions), 2)
+        self.assertEqual((regions[0].min_x, regions[0].max_x), (0.0, 105.0))
+        self.assertEqual((regions[1].min_x, regions[1].max_x), (150.0, 255.0))
+
+    def test_split_dxf_frames_writes_one_png_and_manifest_per_frame(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            drawing = root / "frames.dxf"
+            document = ezdxf.new("R2018")
+            layout = document.modelspace()
+            for origin_x in (0, 100):
+                layout.add_lwpolyline(
+                    [(origin_x, 0), (origin_x + 80, 0), (origin_x + 80, 40), (origin_x, 40)], close=True,
+                )
+            document.saveas(drawing)
+
+            manifest = split_dxf_frames(drawing, root / "output", dpi=72)
+
+            self.assertEqual(manifest["frame_count"], 2)
+            self.assertFalse(manifest["used_modelspace_fallback"])
+            self.assertTrue((root / "output" / "region_01.png").is_file())
+            self.assertTrue((root / "output" / "region_02.png").is_file())
+            self.assertTrue((root / "output" / "frames.json").is_file())
 
     def test_detects_frame_assembled_from_polyline_segments(self):
         document = ezdxf.new("R2018")

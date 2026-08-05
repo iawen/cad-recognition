@@ -7,6 +7,36 @@ export async function getTaskStatus(taskId: string): Promise<ApiResponse<Recogni
   return apiClient.get(`/recognition/${taskId}`);
 }
 
+export interface RecognitionProgressEvent {
+  task: RecognitionTask;
+  event: {
+    id: number;
+    phase: string;
+    progress: number;
+    message: string;
+    work?: RecognitionTask['currentWork'];
+    created_at: string;
+  };
+}
+
+/** Subscribe to the backend task stream; callers must close the returned source. */
+export function streamTaskProgress(
+  taskId: string,
+  onProgress: (progress: RecognitionProgressEvent) => void,
+  onError: () => void,
+): EventSource {
+  const source = new EventSource(`/api/drawing-recognition/runs/${encodeURIComponent(taskId)}/stream`);
+  source.addEventListener('progress', (event) => {
+    try {
+      onProgress(JSON.parse((event as MessageEvent<string>).data) as RecognitionProgressEvent);
+    } catch {
+      onError();
+    }
+  });
+  source.onerror = onError;
+  return source;
+}
+
 /** 获取所有符号 */
 export async function getSymbols(taskId: string): Promise<ApiResponse<ElectricalSymbol[]>> {
   return apiClient.get(`/recognition/${taskId}/symbols`);

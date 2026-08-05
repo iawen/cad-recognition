@@ -91,6 +91,9 @@ export interface RecognitionTask {
   fileSize: number;
   status: string;
   progress: number;
+  phase?: string;
+  message?: string;
+  currentWork?: RecognitionWork;
   createdAt: string;
   completedAt?: string;
   /** 后端任务失败时的可读错误原因 */
@@ -102,4 +105,18 @@ export interface RecognitionTask {
   imageHeight: number;
   baseImages?: BaseImage[];
   sheets: SheetInfo[];
+}
+
+/** 识别任务正在执行的细粒度工作单元。 */
+export interface RecognitionWork {
+  kind: 'drawing_frames' | 'frame_vector_parse' | 'template_match' | 'vlm_component_frame' | 'vlm_component_tile' | 'vlm_text_frame' | 'vlm_text_tile' | 'frame_render';
+  frame_index?: number;
+  frame_total?: number;
+  frame_name?: string;
+  tile_index?: number;
+  tile_total?: number;
+  tile_name?: string;
+  template_index?: number;
+  template_total?: number;
+  template_name?: string;
 }

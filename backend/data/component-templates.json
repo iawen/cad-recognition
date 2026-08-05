@@ -1,0 +1,9 @@
+{
+  "templates": [],
+  "_example": {
+    "component_type": "circuit_breaker",
+    "path": "../../data/templates/circuit_breaker.dxf",
+    "name": "断路器标准符号",
+    "min_confidence": 0.9
+  }
+}
