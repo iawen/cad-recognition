@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Alert, Spin, message } from 'antd';
-import { getTaskStatus, getSymbols, getTables, getTexts, streamTaskProgress } from '../../api/recognition';
+import { getLayoutRegions, getTaskStatus, getSymbols, getTables, getTexts, reextractLayoutRegion, streamTaskProgress } from '../../api/recognition';
 import {
   RecognitionTask,
   ElectricalSymbol,
   ExtractedTable,
   ExtractedText,
+  LayoutRegion,
   ProgressiveComponent,
+  TableQuantityExtraction,
 } from '../../types/recognition';
 import { UploadTask } from '../../types/upload';
 import { useCanvasStore } from '../../store/canvasStore';
@@ -15,6 +17,7 @@ import ResultHeader from './ResultHeader';
 import LeftPanel from './LeftPanel';
 import CanvasViewer from './CanvasViewer/CanvasViewer';
 import { getSymbolColor } from '../../utils/colors';
+import { BoundingBox } from '../../types/recognition';
 
 export default function ResultPage() {
   const { taskId } = useParams<{ taskId: string }>();
@@ -23,6 +26,8 @@ export default function ResultPage() {
   const [symbols, setSymbols] = useState<ElectricalSymbol[]>([]);
   const [tables, setTables] = useState<ExtractedTable[]>([]);
   const [texts, setTexts] = useState<ExtractedText[]>([]);
+  const [layoutRegions, setLayoutRegions] = useState<LayoutRegion[]>([]);
+  const [reextractingRegionId, setReextractingRegionId] = useState<string | null>(null);
   const { selectedSheetIndex, setSelectedSheetIndex } = useCanvasStore();
   const resultLoadedRef = useRef(false);
 
@@ -95,24 +100,61 @@ export default function ResultPage() {
     setSymbols([...groups.values()]);
   }, []);
 
-  const loadCompletedData = useCallback(async () => {
-    if (!taskId || resultLoadedRef.current) return;
+  const normalizeLayoutRegions = useCallback((regions: Array<Omit<LayoutRegion, 'boundingBox'>>, baseImages: RecognitionTask['baseImages'] = []) => (
+    regions.map((region) => {
+      const frame = baseImages?.find((item) => item.index === region.frameIndex);
+      const [minX, minY, maxX, maxY] = region.cadExtent;
+      if (!frame) return { ...region, boundingBox: { x: 0, y: 0, width: 0, height: 0 } };
+      const [frameMinX, frameMinY, frameMaxX, frameMaxY] = frame.cadExtent;
+      return {
+        ...region,
+        boundingBox: {
+          x: (minX - frameMinX) / (frameMaxX - frameMinX),
+          y: (frameMaxY - maxY) / (frameMaxY - frameMinY),
+          width: (maxX - minX) / (frameMaxX - frameMinX),
+          height: (maxY - minY) / (frameMaxY - frameMinY),
+        },
+      };
+    })
+  ), []);
+
+  const normalizeTable = useCallback((extraction: TableQuantityExtraction): ExtractedTable => ({
+    id: `table:${extraction.frame_index}:${extraction.table_name}`,
+    title: `主图框 ${extraction.frame_index + 1} 元器件数量表`,
+    headers: ['元器件', '型号/类别', '数量', '单位', '置信度', '证据'],
+    rows: (extraction.components || []).map((item) => [
+      String(item.name || ''), String(item.component_type || ''), String(item.quantity ?? ''),
+      String(item.unit || ''), String(item.confidence ?? ''), String(item.evidence || ''),
+    ]),
+    position: { x: 0, y: 0, sheet: `页${extraction.frame_index + 1}` },
+    confidence: extraction.components?.length
+      ? Math.min(...extraction.components.map((item) => Number(item.confidence || 0)))
+      : 0,
+    boundingBox: { x: 0, y: 0, width: 0, height: 0 },
+  }), []);
+
+  const loadCompletedData = useCallback(async (force = false) => {
+    if (!taskId || (resultLoadedRef.current && !force)) return;
     resultLoadedRef.current = true;
     try {
-      const [symbolsRes, tablesRes, textsRes] = await Promise.all([
+      const completedTask = (await getTaskStatus(taskId)).data;
+      setTask(completedTask);
+      const [symbolsRes, tablesRes, textsRes, regionsRes] = await Promise.all([
         getSymbols(taskId),
         getTables(taskId),
         getTexts(taskId),
+        getLayoutRegions(taskId),
       ]);
       setSymbols(symbolsRes.data);
       setTables(tablesRes.data);
       setTexts(textsRes.data);
+      setLayoutRegions(normalizeLayoutRegions(regionsRes.data, completedTask.baseImages));
       message.success('识别完成！');
     } catch {
       resultLoadedRef.current = false;
       message.error('加载识别结果失败');
     }
-  }, [taskId]);
+  }, [normalizeLayoutRegions, taskId]);
 
   useEffect(() => {
     if (!taskId) return;
@@ -149,6 +191,19 @@ export default function ResultPage() {
             if (event.work?.kind === 'frame_components' && event.work.components) {
               applyProgressiveComponents(event.work.components);
             }
+            if (event.work?.kind === 'frame_layout_regions' && event.work.layout_regions) {
+              const incoming = normalizeLayoutRegions(event.work.layout_regions, streamedTask.baseImages);
+              setLayoutRegions((current) => [
+                ...current.filter((region) => region.frameIndex !== event.work?.frame_index), ...incoming,
+              ]);
+            }
+            if (event.work?.kind === 'table_quantities' && event.work.table) {
+              const incoming = normalizeTable(event.work.table);
+              setTables((current) => [
+                ...current.filter((table) => table.id !== incoming.id), incoming,
+              ]);
+              message.success(`主图框 ${(event.work.frame_index ?? 0) + 1} 的数量表已提取 ${event.work.table.component_count} 条记录`);
+            }
             if (streamedTask.status === 'completed') {
               source?.close();
               void loadCompletedData();
@@ -174,7 +229,7 @@ export default function ResultPage() {
       disposed = true;
       cleanupSource?.close();
     };
-  }, [applyProgressiveComponents, loadCompletedData, syncTaskHistory, taskId]);
+  }, [applyProgressiveComponents, loadCompletedData, normalizeLayoutRegions, normalizeTable, syncTaskHistory, taskId]);
 
   useEffect(() => {
     if (task && !task.sheets.some((sheet) => sheet.index === selectedSheetIndex)) {
@@ -189,7 +244,7 @@ export default function ResultPage() {
     [symbols, sheetLabel]
   );
   const filteredTables = useMemo(
-    () => tables.filter((t) => t.position.sheet === sheetLabel),
+    () => tables.filter((t) => t.position?.sheet === sheetLabel),
     [tables, sheetLabel]
   );
   const filteredTexts = useMemo(
@@ -197,6 +252,39 @@ export default function ResultPage() {
     [texts, sheetLabel]
   );
   const selectedBaseImage = task?.baseImages?.find((image) => image.index === selectedSheetIndex);
+  const filteredLayoutRegions = useMemo(
+    () => layoutRegions.filter((region) => region.frameIndex === selectedSheetIndex),
+    [layoutRegions, selectedSheetIndex],
+  );
+
+  const updateLayoutRegion = useCallback((region: LayoutRegion, boundingBox: BoundingBox) => {
+    setLayoutRegions((current) => current.map((item) => item.id === region.id ? { ...item, boundingBox } : item));
+  }, []);
+
+  const rerunLayoutRegion = useCallback(async (region: LayoutRegion) => {
+    if (!taskId || !selectedBaseImage) return;
+    const [frameMinX, frameMinY, frameMaxX, frameMaxY] = selectedBaseImage.cadExtent;
+    const box = region.boundingBox;
+    const cadExtent: [number, number, number, number] = [
+      frameMinX + box.x * (frameMaxX - frameMinX),
+      frameMaxY - (box.y + box.height) * (frameMaxY - frameMinY),
+      frameMinX + (box.x + box.width) * (frameMaxX - frameMinX),
+      frameMaxY - box.y * (frameMaxY - frameMinY),
+    ];
+    setReextractingRegionId(region.id);
+    try {
+      message.loading({ content: `正在重新提取${region.kind === 'electrical' ? '电气' : '表格'}区域，VLM 处理可能需要数分钟…`, key: `region-${region.id}`, duration: 0 });
+      const response = await reextractLayoutRegion(taskId, {
+        frame_index: region.frameIndex, kind: region.kind, cad_extent: cadExtent,
+      });
+      await loadCompletedData(true);
+      message.success({ content: `${region.kind === 'electrical' ? '电气' : '表格'}区域已重新提取 ${response.data.componentCount} 项结果`, key: `region-${region.id}` });
+    } catch {
+      message.error({ content: '区域重新提取失败，请查看日志。', key: `region-${region.id}` });
+    } finally {
+      setReextractingRegionId(null);
+    }
+  }, [loadCompletedData, selectedBaseImage, taskId]);
 
   if (loading) {
     return (
@@ -294,6 +382,10 @@ export default function ResultPage() {
             imageUrl={selectedBaseImage?.imageUrl || ''}
             imageWidth={selectedBaseImage?.imageWidth || 0}
             imageHeight={selectedBaseImage?.imageHeight || 0}
+            layoutRegions={filteredLayoutRegions}
+            onLayoutRegionChange={updateLayoutRegion}
+            onReextractLayoutRegion={rerunLayoutRegion}
+            reextractingRegionId={reextractingRegionId}
           />
         </div>
       </div>

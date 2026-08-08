@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { Input, Select, Tag, Typography, List, Space, Tooltip } from 'antd';
+import { Input, Select, Tag, Typography, List, Space, Tooltip, Empty } from 'antd';
 import { SearchOutlined, FileTextOutlined } from '@ant-design/icons';
 import { ExtractedText, TextType } from '../../../types/recognition';
 import { useCanvasStore } from '../../../store/canvasStore';
@@ -99,10 +99,16 @@ export default function TextTab({ texts }: TextTabProps) {
 
       {/* 文字列表 */}
       <div ref={listRef} style={{ flex: 1, overflow: 'auto' }}>
-        <List
-          size="small"
-          dataSource={filteredTexts}
-          renderItem={(item) => {
+        {filteredTexts.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={texts.length === 0 ? '未发现可用的原生 DXF 文字' : '没有符合筛选条件的文字'}
+          />
+        ) : (
+          <List
+            size="small"
+            dataSource={filteredTexts}
+            renderItem={(item) => {
             const isHighlighted = highlightedTextId === item.id;
             return (
               <div
@@ -162,8 +168,9 @@ export default function TextTab({ texts }: TextTabProps) {
                 </div>
               </div>
             );
-          }}
-        />
+            }}
+          />
+        )}
       </div>
     </div>
   );

@@ -86,6 +86,37 @@ export interface BaseImage {
   cadExtent: [number, number, number, number];
 }
 
+/** 主图框中的电气或数量表工作区域。边界框相对于所属主图框归一化。 */
+export interface LayoutRegion {
+  id: string;
+  frameIndex: number;
+  frameName: string;
+  kind: 'electrical' | 'table';
+  name: string;
+  cadExtent: [number, number, number, number];
+  boundingBox: BoundingBox;
+  confidence: number;
+  imagePath?: string;
+}
+
+/** Table quantity extraction record emitted while a drawing is still running. */
+export interface TableQuantityExtraction {
+  source?: string;
+  frame_index: number;
+  frame_name?: string;
+  table_name: string;
+  cad_extent: [number, number, number, number];
+  component_count: number;
+  components: Array<{
+    name?: string;
+    component_type?: string;
+    quantity?: number;
+    unit?: string;
+    confidence?: number;
+    evidence?: string;
+  }>;
+}
+
 /** 识别任务（含图纸图片信息） */
 export interface RecognitionTask {
   taskId: string;
@@ -111,7 +142,7 @@ export interface RecognitionTask {
 
 /** 识别任务正在执行的细粒度工作单元。 */
 export interface RecognitionWork {
-  kind: 'drawing_frames' | 'frame_vector_parse' | 'frame_components' | 'template_match' | 'vlm_component_frame' | 'vlm_component_tile' | 'vlm_text_frame' | 'vlm_text_tile' | 'frame_render';
+  kind: 'drawing_frames' | 'frame_layout_regions' | 'frame_vector_parse' | 'frame_components' | 'template_match' | 'vlm_component_frame' | 'vlm_component_tile' | 'vlm_text_frame' | 'vlm_text_tile' | 'table_quantity_extraction' | 'table_quantities' | 'frame_render';
   frame_index?: number;
   frame_total?: number;
   frame_name?: string;
@@ -121,7 +152,10 @@ export interface RecognitionWork {
   template_index?: number;
   template_total?: number;
   template_name?: string;
+  table_name?: string;
   components?: ProgressiveComponent[];
+  layout_regions?: Array<Omit<LayoutRegion, 'boundingBox'>>;
+  table?: TableQuantityExtraction;
 }
 
 /** A component emitted while the backend is still processing drawing frames. */

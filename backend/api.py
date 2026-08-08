@@ -20,9 +20,13 @@ from ingest.file_validation import SUPPORTED_EXTENSIONS
 from ingest.dwg_converter import use_realdwg
 from recognition.component_catalog import CATALOG_SOURCE, catalog_capabilities
 from recognition.reference_icons import reference_icon_summary
-from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events, wait_for_event
+from runtime.repository import RENDER_ROOT, UPLOAD_ROOT, create_run, get_run, get_run_path, list_events, update_run, wait_for_event
 from runtime.worker import submit_analysis
 from service import analyze_drawing, render_dxf_base_maps
+from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
+from rendering.dxf_renderer import render_dxf_region_to_png
+from rendering.regions import DrawingRegion
+from tools.extract_table_component_quantities import extract_component_quantities
 from tools.logger import logger
 
 
@@ -46,6 +50,14 @@ _COMPONENT_COLORS = {
 class FeasibilityLogin(BaseModel):
     username: str
     password: str
+
+
+class LayoutRegionAdjustment(BaseModel):
+    """User-adjusted CAD bounds for a stored electrical or table work region."""
+
+    frame_index: int
+    kind: str
+    cad_extent: tuple[float, float, float, float]
 
 
 def _response(data: object, message: str = "ok") -> dict[str, object]:
@@ -123,7 +135,7 @@ def _frontend_task(run: dict) -> dict[str, object]:
     image_width, image_height = _render_dimensions(render_path)
     limitations = (run.get("result") or {}).get("audit", {}).get("limitations", [])
     visual_warning = next(
-        (item for item in limitations if item.startswith(("视觉识别未执行：", "VLM 文字提取未执行："))),
+        (item for item in limitations if item.startswith(("部分电气区域元器件 VLM 识别未完成：", "VLM 文字提取未执行："))),
         None,
     )
     return {
@@ -236,8 +248,8 @@ async def get_drawing_recognition_capabilities():
     return {
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
         "dwg_parser": "realdwg_sidecar" if use_realdwg() else "oda_file_converter",
-        "implemented": ["p0_batch_audit", "dxf_audit", "block_component_recognition", "native_text_extraction", "text_component_linking", "persistent_runs", "sse_progress"],
-        "optional": ["frame_base_map_rendering", "overlapping_tiling", "frame_vlm_component_detection_when_enabled", "frame_vlm_text_extraction_when_enabled", "obb_detection_when_model_configured"],
+        "implemented": ["p0_batch_audit", "dxf_audit", "block_component_recognition", "native_text_extraction", "native_text_table_quantity_extraction", "persistent_runs", "sse_progress"],
+        "optional": ["frame_base_map_rendering", "overlapping_tiling", "frame_vlm_component_detection_when_enabled", "table_vlm_quantity_extraction_when_enabled", "obb_detection_when_model_configured"],
         "not_implemented": ["paddleocr", "wire_tracing", "netlist", "human_review_workspace"],
         "component_catalog_source": CATALOG_SOURCE,
         "supported_components": catalog_capabilities(),
@@ -366,15 +378,53 @@ async def get_frontend_symbols(task_id: str):
 @router.get("/api/recognition/{task_id}/tables")
 async def get_frontend_tables(task_id: str):
     logger.info("Frontend tables requested run_id=%s", task_id)
-    _completed_result(task_id)
-    # BOM/table extraction is intentionally outside this feasibility-validation scope.
-    return _response([])
+    result = _completed_result(task_id)
+    tables = []
+    for index, extraction in enumerate(result.get("drawing", {}).get("tables", []), start=1):
+        frame_index = extraction.get("frame_index", 0)
+        components = extraction.get("components", [])
+        rows = [
+            [
+                str(item.get("name", "")), str(item.get("component_type", "")),
+                str(item.get("quantity", "")), str(item.get("unit", "")),
+                str(item.get("confidence", "")), str(item.get("evidence", "")),
+            ]
+            for item in components
+        ]
+        tables.append({
+            "id": f"table:{frame_index}:{extraction.get('table_name', index)}",
+            "title": f"主图框 {frame_index + 1} 元器件数量表",
+            "headers": ["元器件", "型号/类别", "数量", "单位", "置信度", "证据"],
+            "rows": rows,
+            "position": {"x": 0, "y": 0, "sheet": f"页{frame_index + 1}"},
+            "confidence": round(min((float(item.get("confidence", 0)) for item in components), default=0), 3),
+            "boundingBox": {"x": 0, "y": 0, "width": 0, "height": 0},
+        })
+    logger.info("Frontend tables returned run_id=%s count=%s", task_id, len(tables))
+    return _response(tables)
 
 
 @router.get("/api/recognition/{task_id}/texts")
 async def get_frontend_texts(task_id: str):
     logger.info("Frontend texts requested run_id=%s", task_id)
     result = _completed_result(task_id)
+    native_text_assessment = result.get("audit", {}).get("native_text_extraction", {})
+    if not native_text_assessment:
+        native_texts = [
+            str(text.get("content", "")).strip()
+            for text in result.get("texts", [])
+            if str(text.get("content", "")).strip()
+        ]
+        native_text_assessment = {
+            "usable": any(len(text) >= 2 for text in native_texts),
+            "reason": "历史任务仅包含单字符或空白原生 DXF 文字。",
+        }
+    if native_text_assessment and not native_text_assessment.get("usable", True):
+        logger.info(
+            "Frontend texts suppressed run_id=%s reason=%s",
+            task_id, native_text_assessment.get("reason", "native_text_unusable"),
+        )
+        return _response([], "原生 DXF 文字不可用，已不在结果页展示。")
     _, text_boxes = _normalized_boxes(result)
     base_images = result.get("drawing", {}).get("base_images", [])
     texts = []
@@ -392,6 +442,114 @@ async def get_frontend_texts(task_id: str):
         })
     logger.info("Frontend texts returned run_id=%s count=%s", task_id, len(texts))
     return _response(texts)
+
+
+@router.get("/api/recognition/{task_id}/layout-regions")
+async def get_frontend_layout_regions(task_id: str):
+    """Return persisted semantic work regions for overlay and editing."""
+    result = _completed_result(task_id)
+    regions = []
+    for frame in result.get("drawing", {}).get("frames", []):
+        for region in frame.get("layout_regions", []):
+            regions.append({
+                "id": f"{frame['index']}:{region['name']}", "frameIndex": frame["index"],
+                "frameName": frame["name"], "kind": region["kind"], "name": region["name"],
+                "cadExtent": region["cad_extent"], "confidence": region.get("confidence", 0),
+                "evidence": region.get("evidence", {}), "imagePath": region.get("image_path"),
+            })
+    logger.info("Frontend layout regions returned run_id=%s count=%s", task_id, len(regions))
+    return _response(regions)
+
+
+@router.post("/api/recognition/{task_id}/layout-regions/reextract")
+async def reextract_adjusted_layout_region(task_id: str, adjustment: LayoutRegionAdjustment):
+    """Persist an edited region, render it, and rerun its applicable VLM stage."""
+    if adjustment.kind not in {"electrical", "table"}:
+        raise HTTPException(422, "区域类型只能是 electrical 或 table。")
+    run = get_run(task_id)
+    result = _completed_result(task_id)
+    frames = result.get("drawing", {}).get("frames", [])
+    frame = next((item for item in frames if item.get("index") == adjustment.frame_index), None)
+    if frame is None:
+        raise HTTPException(422, "主图框不存在。")
+    min_x, min_y, max_x, max_y = adjustment.cad_extent
+    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame["cad_extent"]
+    if not (frame_min_x <= min_x < max_x <= frame_max_x and frame_min_y <= min_y < max_y <= frame_max_y):
+        raise HTTPException(422, "调整后的区域必须完整位于所属主图框内，并保持正宽高。")
+    stored_region = next((item for item in frame.get("layout_regions", []) if item.get("kind") == adjustment.kind), None)
+    if stored_region is None:
+        raise HTTPException(422, "该主图框没有可调整的对应区域。")
+    source_path = get_run_path(task_id)
+    if source_path is None or not source_path.is_file():
+        raise HTTPException(404, "识别任务的原始图纸不存在。")
+
+    region = DrawingRegion(stored_region["name"], min_x, min_y, max_x, max_y)
+    category = "electrical_regions" if adjustment.kind == "electrical" else "table_regions"
+    image_path = RENDER_ROOT / task_id / "layout-regions" / category / f"{stored_region['name']}_adjusted.png"
+    logger.info(
+        "Layout region VLM re-extraction started run_id=%s frame=%s kind=%s cad_extent=%s",
+        task_id, adjustment.frame_index + 1, adjustment.kind, adjustment.cad_extent,
+    )
+    # Rendering and VLM requests use synchronous libraries. Offload them so a
+    # long manual re-extraction does not block SSE and unrelated API requests
+    # on the FastAPI event loop.
+    await asyncio.to_thread(
+        render_dxf_region_to_png, source_path, image_path, region, dpi=450, max_size_inches=10.0,
+    )
+    stored_region["cad_extent"] = [min_x, min_y, max_x, max_y]
+    stored_region["image_path"] = image_path.relative_to(RENDER_ROOT / task_id).as_posix()
+
+    if adjustment.kind == "table":
+        try:
+            extraction = await asyncio.to_thread(extract_component_quantities, image_path)
+        except RuntimeError as exc:
+            logger.warning(
+                "Layout region table VLM re-extraction failed run_id=%s frame=%s image=%s error=%s",
+                task_id, adjustment.frame_index + 1, image_path.name, exc,
+            )
+            raise HTTPException(502, f"表格区域 VLM 重新提取失败：{exc}") from exc
+        extraction.pop("raw_response", None)
+        extraction.update({
+            "source": "table_region_vlm_image", "frame_index": adjustment.frame_index,
+            "frame_name": frame["name"], "table_name": stored_region["name"],
+            "cad_extent": [min_x, min_y, max_x, max_y], "table_image_path": stored_region["image_path"],
+        })
+        tables = result.setdefault("drawing", {}).setdefault("tables", [])
+        tables[:] = [item for item in tables if not (
+            item.get("frame_index") == adjustment.frame_index and item.get("table_name") == stored_region["name"]
+        )]
+        tables.append(extraction)
+        response_data = {"kind": "table", "componentCount": extraction["component_count"], "table": extraction}
+    else:
+        try:
+            detections, audit = await asyncio.to_thread(
+                detect_visual_components,
+                source_path,
+                include_audit=True,
+                frame_contexts=[(adjustment.frame_index, region)],
+            )
+        except VisualDetectionError as exc:
+            raise HTTPException(502, f"电气区域 VLM 重新识别失败：{exc}") from exc
+        components = result.setdefault("components", [])
+        components[:] = [item for item in components if not (
+            item.get("source") == "vision" and item.get("frame_index") == adjustment.frame_index
+        )]
+        components.extend(item.model_dump(mode="json") for item in detections)
+        result["summary"]["component_count"] = len(components)
+        result["summary"]["vision_component_count"] = sum(item.get("source") == "vision" for item in components)
+        result.setdefault("audit", {}).setdefault("visual_detection", {})[f"frame_{adjustment.frame_index + 1}_adjusted"] = audit
+        response_data = {"kind": "electrical", "componentCount": len(detections), "components": detections}
+
+    update_run(
+        task_id, status=run["status"], phase="done", progress=100,
+        message=f"已完成主图框 {adjustment.frame_index + 1} 的{('电气' if adjustment.kind == 'electrical' else '表格')}区域 VLM 重新提取。",
+        result=result,
+    )
+    logger.info(
+        "Layout region VLM re-extraction completed run_id=%s frame=%s kind=%s components=%s",
+        task_id, adjustment.frame_index + 1, adjustment.kind, response_data["componentCount"],
+    )
+    return _response(response_data)
 
 
 @router.post("/api/drawing-recognition/runs")

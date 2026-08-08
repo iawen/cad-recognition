@@ -33,22 +33,10 @@ ODA_FILE_CONVERTER=C:\Path\To\ODAFileConverter.exe
 
 `DRAWING_VLM_TEMPERATURE` 默认值为 `1`。当前 TokenHub Kimi K3 接口明确要求温度只能为 `1`，不要将其设为 `0`。
 
-### Excel 图标参考
-
-`data/图标资料/电气元件对应名称260731.xlsx` 内嵌的 PNG 符号图会在首次 VLM 调用时自动提取到 `backend/data/runtime/reference-icons/`。当前有效引用覆盖全部 15 个业务类别；提取缓存可安全删除，下一次调用会由原始 Excel 重新生成。
-
-默认会为一次 VLM 请求附带每类最多一张、缩小到 256 像素以内的带标签参考图，以辅助模型区分相近符号。可按模型的图像上下文限制调整以下本地配置：
-
-```text
-DRAWING_VLM_USE_EXCEL_REFERENCES=true
-DRAWING_VLM_REFERENCE_LIMIT=4
-DRAWING_VLM_TIMEOUT_SECONDS=30
-```
-
-将 `DRAWING_VLM_REFERENCE_LIMIT` 调低可减少请求成本；设为 `0` 或将 `DRAWING_VLM_USE_EXCEL_REFERENCES=false` 可关闭参考图。`DRAWING_VLM_TIMEOUT_SECONDS` 默认为 30 秒，避免不支持或无法响应图片请求的模型使整张图纸长时间阻塞。每个切片的模型名、耗时、参考图数量、有效候选数及失败状态会写入任务结果的 `audit.visual_detection`，不会保存密钥、请求正文或图片数据。
+VLM 元器件识别只发送当前电气区的 CAD 直接渲染切片，并以 `component-evidence.json` 中的元器件特征描述和可识别的文字线索约束分类；不再附带 Excel 或其他参考小图。`DRAWING_VLM_TIMEOUT_SECONDS` 用于限制单个图片请求的最长等待时间。每个切片的模型名、耗时、特征描述数量、有效候选数及失败状态会写入任务结果的 `audit.visual_detection`，不会保存密钥、请求正文或图片数据。
 
 ### DXF 矢量模板
 
-将已分类的 DXF 元器件符号放入 `backend/data/runtime/reference-icons/<component_type>/`，服务会在每次任务开始时自动加载其中所有 `.dxf` 文件作为矢量模板。例如，断路器模板应放在 `backend/data/runtime/reference-icons/circuit_breaker/`。目录名必须是受支持的规范类别名；文件名仅作为显示名称，不参与类别推断。可选的 `DRAWING_TEMPLATE_MANIFEST` 仅用于补充该目录以外的模板。
+将已分类的 DXF 元器件符号放入 `backend/data/runtime/reference-icons/<component_type>/`，服务会在每次任务开始时自动加载其中所有 `.dxf` 文件作为矢量模板。例如，断路器模板应放在 `backend/data/runtime/reference-icons/circuit_breaker/`。目录名必须是受支持的规范类别名；文件名仅作为显示名称，不参与类别推断。可选的 `DRAWING_TEMPLATE_MANIFEST` 仅用于补充该目录以外的模板。`DRAWING_TEMPLATE_MATCHING_ENABLED` 默认是 `true`；设为 `false` 时完全跳过矢量模板加载和匹配，保留原生 Block 与 VLM/OBB 识别链路。
 
 若 VLM 调用失败且 `.env` 同时配置了可用的 `DRAWING_OBB_MODEL`，处理流程会自动改用 OBB 检测器继续处理后续切片；未配置 OBB 权重时会保留矢量识别结果及失败原因。

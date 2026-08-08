@@ -1,8 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { Button, Space } from 'antd';
 import { Image as KonvaImage, Stage, Layer } from 'react-konva';
 import { KonvaEventObject } from 'konva/lib/Node';
-import { ElectricalSymbol, ExtractedTable, ExtractedText } from '../../../types/recognition';
+import { BoundingBox, ElectricalSymbol, ExtractedTable, ExtractedText, LayoutRegion } from '../../../types/recognition';
 import BoundingBoxLayer from './BoundingBoxLayer';
+import LayoutRegionLayer from './LayoutRegionLayer';
 
 interface CanvasViewerProps {
   symbols: ElectricalSymbol[];
@@ -12,6 +14,10 @@ interface CanvasViewerProps {
   imageUrl: string;
   imageWidth: number;
   imageHeight: number;
+  layoutRegions: LayoutRegion[];
+  onLayoutRegionChange: (region: LayoutRegion, boundingBox: BoundingBox) => void;
+  onReextractLayoutRegion: (region: LayoutRegion) => void;
+  reextractingRegionId?: string | null;
 }
 
 const FALLBACK_IMAGE_WIDTH = 1200;
@@ -27,12 +33,18 @@ export default function CanvasViewer({
   imageUrl,
   imageWidth,
   imageHeight,
+  layoutRegions,
+  onLayoutRegionChange,
+  onReextractLayoutRegion,
+  reextractingRegionId,
 }: CanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [drawingImage, setDrawingImage] = useState<HTMLImageElement | null>(null);
+  const [showElectricalRegions, setShowElectricalRegions] = useState(true);
+  const [showTableRegions, setShowTableRegions] = useState(true);
 
   // 切换图纸页时重置缩放和位置
   useEffect(() => {
@@ -124,6 +136,14 @@ export default function CanvasViewer({
       }}
     >
       {/* 缩放提示 */}
+      <Space style={{ position: 'absolute', top: 8, right: 8, zIndex: 10 }}>
+        <Button size="small" type={showElectricalRegions ? 'primary' : 'default'} onClick={() => setShowElectricalRegions((value) => !value)}>
+          电气区域
+        </Button>
+        <Button size="small" type={showTableRegions ? 'primary' : 'default'} onClick={() => setShowTableRegions((value) => !value)}>
+          表格区域
+        </Button>
+      </Space>
       <div
         style={{
           position: 'absolute',
@@ -163,6 +183,15 @@ export default function CanvasViewer({
 
         {/* 标注层：交互式边界框 */}
         <Layer key={`boxes-${sheetIndex}`}>
+          <LayoutRegionLayer
+            regions={layoutRegions}
+            imageWidth={renderedWidth}
+            imageHeight={renderedHeight}
+            scale={scale}
+            showElectrical={showElectricalRegions}
+            showTables={showTableRegions}
+            onRegionChange={onLayoutRegionChange}
+          />
           <BoundingBoxLayer
             symbols={symbols}
             tables={tables}
@@ -173,6 +202,19 @@ export default function CanvasViewer({
           />
         </Layer>
       </Stage>
+      <div style={{ position: 'absolute', top: 44, right: 8, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {layoutRegions.map((region) => (
+          <Button
+            key={region.id}
+            size="small"
+            disabled={Boolean(reextractingRegionId)}
+            loading={reextractingRegionId === region.id}
+            onClick={() => onReextractLayoutRegion(region)}
+          >
+            重新提取：{region.kind === 'electrical' ? '电气' : '表格'}区域
+          </Button>
+        ))}
+      </div>
       {!drawingImage && (
         <div
           style={{

@@ -131,7 +131,7 @@ def get_run(run_id: str) -> dict[str, Any] | None:
     result["result"] = json.loads(result.pop("result_json")) if result.get("result_json") else None
     result["work"] = json.loads(result.pop("work_json")) if result.get("work_json") else None
     result.pop("file_path", None)
-    logger.info("Run loaded run_id=%s status=%s phase=%s", run_id, result["status"], result["phase"])
+    logger.debug("Run loaded run_id=%s status=%s phase=%s", run_id, result["status"], result["phase"])
     return result
 
 

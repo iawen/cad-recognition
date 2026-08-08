@@ -97,6 +97,7 @@ export default function UploadPage() {
     if (work?.kind === 'frame_components') return `主图框 ${work.frame_index! + 1}/${work.frame_total} 已识别 ${work.components?.length || 0} 个元器件`;
     if (work?.kind === 'frame_vector_parse') return `正在解析主图框 ${work.frame_index! + 1}/${work.frame_total}`;
     if (work?.kind === 'frame_render') return `正在保存主图框 ${work.frame_index! + 1}/${work.frame_total} 的底图`;
+    if (work?.kind === 'table_quantity_extraction') return `正在提取主图框 ${work.frame_index! + 1}/${work.frame_total} 的元器件数量表`;
     if (work?.tile_index !== undefined) return `主图框 ${work.frame_index! + 1}/${work.frame_total}，区域 ${work.tile_index + 1}/${work.tile_total}`;
     if (work?.frame_index !== undefined) return `主图框 ${work.frame_index + 1}/${work.frame_total}`;
     return task.message || '等待识别任务开始';

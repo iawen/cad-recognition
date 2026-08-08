@@ -10,6 +10,7 @@ import base64
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,11 +21,41 @@ from dotenv import load_dotenv
 
 from recognition.component_catalog import supported_component_types
 from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
-from recognition.reference_icons import vlm_reference_images
 from tools.logger import logger
 
 SUPPORTED_COMPONENT_TYPES = supported_component_types()
 _ENABLED_VALUES = {"1", "true", "yes", "on"}
+_REQUEST_INTERVAL_LOCK = threading.Lock()
+_LAST_VLM_REQUEST_STARTED_AT = 0.0
+
+
+def enforce_vlm_request_interval(*, purpose: str) -> float:
+    """Wait for the configured gap before starting any VLM HTTP request.
+
+    ``DRAWING_VLM_REQUEST_INTERVAL_SECONDS=0`` (the default) disables the
+    limiter. A process-wide lock makes the interval effective for both worker
+    threads and manual region re-extraction requests.
+    """
+    raw_interval = os.getenv("DRAWING_VLM_REQUEST_INTERVAL_SECONDS", "0").strip()
+    try:
+        interval_seconds = max(0.0, float(raw_interval))
+    except ValueError:
+        logger.warning("Invalid DRAWING_VLM_REQUEST_INTERVAL_SECONDS=%r; disabling VLM request interval", raw_interval)
+        interval_seconds = 0.0
+    if interval_seconds == 0:
+        return 0.0
+
+    global _LAST_VLM_REQUEST_STARTED_AT
+    with _REQUEST_INTERVAL_LOCK:
+        remaining_seconds = interval_seconds - (time.monotonic() - _LAST_VLM_REQUEST_STARTED_AT)
+        if remaining_seconds > 0:
+            logger.info(
+                "VLM request interval waiting purpose=%s wait_seconds=%.2f interval_seconds=%.2f",
+                purpose, remaining_seconds, interval_seconds,
+            )
+            time.sleep(remaining_seconds)
+        _LAST_VLM_REQUEST_STARTED_AT = time.monotonic()
+    return max(0.0, remaining_seconds)
 
 
 @dataclass(frozen=True)
@@ -70,10 +101,6 @@ class VlmDetector:
         # image-to-JSON detector. Enable only for providers that support this
         # OpenAI-compatible request extension.
         self.disable_thinking = os.getenv("DRAWING_VLM_DISABLE_THINKING", "false").casefold() in _ENABLED_VALUES
-        self.use_excel_references = os.getenv("DRAWING_VLM_USE_EXCEL_REFERENCES", "true").casefold() in _ENABLED_VALUES
-        # A full 15-image catalogue plus a dense drawing tile is unnecessarily
-        # large for most gateways. Users can increase this after a model probe.
-        self.reference_limit = max(0, int(os.getenv("DRAWING_VLM_REFERENCE_LIMIT", "4")))
         # Human-maintained visual and label corroboration rules. Invalid local
         # entries are ignored by the loader rather than blocking recognition.
         self.component_evidence = load_component_evidence()
@@ -96,13 +123,11 @@ class VlmDetector:
 
         image_data = base64.b64encode(image_path.read_bytes()).decode("ascii")
         mime_type = "image/png" if image_path.suffix.casefold() == ".png" else "image/jpeg"
-        references = self._reference_content()
-        content: list[dict[str, object]] = [{"type": "text", "text": self._prompt(bool(references))}]
-        content.extend(references)
-        content.extend([
+        content: list[dict[str, object]] = [
+            {"type": "text", "text": self._prompt()},
             {"type": "text", "text": "This final image is the drawing tile to detect."},
             {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}},
-        ])
+        ]
         payload = {
             "model": self.model_name,
             # The configured TokenHub model rejects temperature=0 and requires
@@ -128,16 +153,16 @@ class VlmDetector:
             "temperature": self.temperature,
             "timeout_seconds": self.timeout_seconds,
             "thinking_disabled": self.disable_thinking,
-            "reference_icon_count": len(references) // 2,
             "component_evidence_count": len(self.component_evidence),
             "started_at_unix_ms": round(time.time() * 1000),
         }
         logger.info(
-            "VLM component request started model=%s tile=%s reference_icons=%s timeout_seconds=%s",
-            self.model_identifier, image_path.name, len(references) // 2, self.timeout_seconds,
+            "VLM component request started model=%s tile=%s feature_descriptions=%s timeout_seconds=%s",
+            self.model_identifier, image_path.name, len(self.component_evidence), self.timeout_seconds,
         )
         started = time.perf_counter()
         try:
+            enforce_vlm_request_interval(purpose="component_detection")
             request = Request(
                 f"{self.base_url}/chat/completions",
                 data=json.dumps(payload).encode("utf-8"),
@@ -210,6 +235,7 @@ class VlmDetector:
         logger.info("VLM text request started model=%s tile=%s timeout_seconds=%s", self.model_identifier, image_path.name, self.timeout_seconds)
         started = time.perf_counter()
         try:
+            enforce_vlm_request_interval(purpose="text_extraction")
             request = Request(
                 f"{self.base_url}/chat/completions", data=json.dumps(payload).encode("utf-8"),
                 headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST",
@@ -237,34 +263,11 @@ class VlmDetector:
         )
         return texts
 
-    def _reference_content(self) -> list[dict[str, object]]:
-        if not self.use_excel_references or self.reference_limit == 0:
-            return []
-        try:
-            references = vlm_reference_images(max_per_type=1)[:self.reference_limit]
-        except RuntimeError:
-            # A reference cache failure must not block a configured VLM from
-            # processing the actual drawing tile.
-            return []
-        content: list[dict[str, object]] = []
-        for index, (component_type, image_bytes) in enumerate(references, start=1):
-            encoded = base64.b64encode(image_bytes).decode("ascii")
-            content.extend([
-                {"type": "text", "text": f"Reference image {index} shows exactly one {component_type} symbol."},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
-            ])
-        return content
-
-    def _prompt(self, has_references: bool = False) -> str:
+    def _prompt(self) -> str:
         labels = ", ".join(SUPPORTED_COMPONENT_TYPES)
-        reference_instruction = (
-            " The preceding labelled images are visual references only; use them to distinguish the allowed classes."
-            if has_references else ""
-        )
         evidence_instruction = visual_evidence_prompt(self.component_evidence)
         return (
             "Find only visible electrical symbols in this image tile. Allowed types: " + labels + ". "
-            + reference_instruction + " "
             + evidence_instruction + " "
             "Return exactly this JSON object: {\"components\":[{\"type\":string,\"bbox\":[xmin,ymin,xmax,ymax],"
             "\"confidence\":number,\"rotation_deg\":number}]}. bbox coordinates are pixels in this tile; "

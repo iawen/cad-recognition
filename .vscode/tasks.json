@@ -1,0 +1,174 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Validate B electrical-table split",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"-m",
+				"tools.split_dxf_layout_regions",
+				"..\\data\\B电气图.dxf",
+				"..\\data\\B电气图_版面分区验证",
+				"--dpi",
+				"120",
+				"--overwrite",
+				"--frame-index",
+				"0"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Generate B semantic split artifacts",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"c:\\work\\cad-recognition\\backend\\tools\\split_dxf_layout_regions.py",
+				"c:\\work\\cad-recognition\\data\\B电气图.dxf",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证",
+				"--dpi",
+				"120",
+				"--overwrite",
+				"--frame-index",
+				"0"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Generate all B semantic split artifacts",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"c:\\work\\cad-recognition\\backend\\tools\\split_dxf_layout_regions.py",
+				"c:\\work\\cad-recognition\\data\\B电气图.dxf",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证",
+				"--dpi",
+				"120",
+				"--overwrite"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Validate two-region layout split",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"-m",
+				"unittest",
+				"tests.test_p0_to_p2.P0ToP2RegressionTests.test_splits_main_frame_into_table_and_electrical_regions",
+				"tests.test_p0_to_p2.P0ToP2RegressionTests.test_prefers_dense_lower_schedule_over_enclosing_schematic_rectangle"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run layout split regression tests",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\"",
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "Run semantic layout tests",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k \"splits_main_frame or prefers_dense_lower\"",
+			"isBackground": false
+		},
+		{
+			"label": "Run table electrical split tests",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k splits_main_frame; if ($LASTEXITCODE -eq 0) { & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k prefers_dense_lower }",
+			"isBackground": false
+		},
+		{
+			"label": "Render high resolution semantic regions",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"c:\\work\\cad-recognition\\backend\\tools\\split_dxf_layout_regions.py",
+				"c:\\work\\cad-recognition\\data\\B电气图.dxf",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证",
+				"--dpi",
+				"450",
+				"--overwrite"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Extract B table quantities with VLM",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"c:\\work\\cad-recognition\\backend\\tools\\extract_table_component_quantities.py",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证\\table_regions\\region_01_table.png",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证\\region_01_table_vlm_quantities.json"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Extract B table quantities with VLM",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"c:\\work\\cad-recognition\\backend\\tools\\extract_table_component_quantities.py",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证\\table_regions\\region_01_table.png",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证\\region_01_table_vlm_quantities.json"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Detect B electrical components with VLM",
+			"type": "shell",
+			"command": "c:\\work\\cad-recognition\\backend\\.venv\\Scripts\\python.exe",
+			"args": [
+				"c:\\work\\cad-recognition\\backend\\tools\\detect_electrical_components_vlm.py",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证\\electrical_regions\\region_01_electrical.png",
+				"c:\\work\\cad-recognition\\data\\B电气图_版面分区验证\\region_01_electrical_vlm_components.json"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run table-only quantity regression",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k table_only",
+			"isBackground": false
+		},
+		{
+			"label": "Run native text table regression",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k table_only",
+			"isBackground": false
+		},
+		{
+			"label": "Run template switch regression",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k template_matching_can_be_disabled",
+			"isBackground": false
+		},
+		{
+			"label": "Run VLM feature-only regression",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\backend\"; & \".venv\\Scripts\\python.exe\" -m unittest discover -s tests -p \"test_p0_to_p2.py\" -k feature_descriptions_without_reference",
+			"isBackground": false
+		},
+		{
+			"label": "Build frontend result page",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\frontend\"; npm run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Build frontend result page",
+			"type": "shell",
+			"command": "Set-Location \"c:\\work\\cad-recognition\\frontend\"; & \"C:\\Tools\\nvm\\v24.18.0\\npm.cmd\" run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		}
+	]
+}

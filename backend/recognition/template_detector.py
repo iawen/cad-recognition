@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from dotenv import load_dotenv
+
 from domain.models import CadPoint, ComponentCandidate, ComponentEvidence
 from recognition.component_catalog import get_component_definition, supported_component_types
 from recognition.vector_template_matcher import geometry_from_dxf, geometry_from_layout, match_template
@@ -24,6 +26,7 @@ from tools.logger import logger
 
 ProgressCallback = Callable[[str, int, str, dict[str, Any]], None]
 _REFERENCE_TEMPLATE_ROOT = Path(__file__).resolve().parents[1] / "data" / "runtime" / "reference-icons"
+_ENABLED_VALUES = {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,24 @@ class ComponentTemplate:
     path: Path
     name: str
     min_confidence: float = 0.9
+
+
+def template_matching_enabled() -> bool:
+    """Return whether vector DXF template matching is enabled for this run.
+
+    The default keeps the established vector-first behavior. Set
+    ``DRAWING_TEMPLATE_MATCHING_ENABLED=false`` to skip loading and matching
+    templates, allowing an explicit Block/VLM/OBB comparison run.
+    """
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    load_dotenv(env_path)
+    configured = os.getenv("DRAWING_TEMPLATE_MATCHING_ENABLED")
+    enabled = configured is None or configured.strip().casefold() in _ENABLED_VALUES
+    logger.info(
+        "Vector template matching configuration enabled=%s configured=%s env_file=%s",
+        enabled, configured if configured is not None else "<default>", env_path,
+    )
+    return enabled
 
 
 def _reference_icon_templates(valid_types: set[str]) -> list[ComponentTemplate]:
@@ -87,6 +108,9 @@ def _manifest_templates(manifest_path: Path, valid_types: set[str]) -> list[Comp
 
 def load_component_templates() -> list[ComponentTemplate]:
     """Load categorized runtime DXF templates and optional manifest additions."""
+    if not template_matching_enabled():
+        logger.info("Vector template loading skipped enabled=false")
+        return []
     valid_types = set(supported_component_types())
     templates = _reference_icon_templates(valid_types)
     manifest_value = os.getenv("DRAWING_TEMPLATE_MANIFEST")

@@ -15,7 +15,7 @@ uv run python -m main
 
 服务默认监听 <http://127.0.0.1:8001>，健康检查地址为 <http://127.0.0.1:8001/api/health>。
 
-首次运行或依赖变更时执行 `uv sync`；依赖已同步后，只需执行后两行。DWG 文件分析需要在 `backend/.env` 中配置 `ODA_FILE_CONVERTER`。VLM 功能默认关闭，只有配置模型端点并显式启用后才会调用。
+首次运行或依赖变更时执行 `uv sync`；依赖已同步后，只需执行后两行。DWG 文件分析需要在 `backend/.env` 中配置 `ODA_FILE_CONVERTER`。VLM 功能默认关闭，只有配置模型端点并显式启用后才会调用。资源有限时可设定 `DRAWING_VLM_REQUEST_INTERVAL_SECONDS=N`，让同一后端进程的任意两次 VLM 请求至少间隔 $N$ 秒；设为 `0`（默认）表示不限制。
 
 ### 前端（终端 2）
 
@@ -54,6 +54,7 @@ npm run dev
 ```bash
 uv run python -m tools.split_dxf_frames ..\data\B电气图_CAD.dxf ..\data\B电气图_CAD_主图框拆分验证 --dpi 450 --overwrite
 uv run python -m tools.split_dxf_frames ..\data\电气设备.dxf ..\data\电气设备_主图框拆分验证 --dpi 450 --overwrite
+uv run python -m tools.split_dxf_layout_regions ..\data\B电气图.dxf ..\data\B电气图_版面分区验证 --dpi 450 --overwrite
 
 uv run python -m tools.match_dxf_component_templates ^
   ..\data\B电气图_CAD.dxf ^

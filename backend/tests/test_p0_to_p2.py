@@ -18,11 +18,12 @@ from evaluation.audit import audit_drawings
 from evaluation.coordinate_validation import validate_coordinate_round_trip
 from fusion.text_association import associate_component_texts, associate_native_text
 from rendering.dxf_renderer import render_dxf_region_to_png, render_dxf_regions_to_png
-from rendering.regions import DrawingRegion, detect_drawing_regions
+from rendering.regions import DrawingRegion, detect_drawing_regions, detect_frame_layout_regions
 from rendering.tiling import create_cad_tiles
 from recognition.vlm_detector import VlmDetector
 from recognition.vlm_detector import VlmDetection
 from recognition.component_evidence import load_component_evidence, visual_evidence_prompt
+from recognition.template_detector import load_component_templates, template_matching_enabled
 from recognition.vector_template_matcher import Segment, match_template, segments_from_dxf
 from recognition.vision_pipeline import VisualDetectionError, detect_visual_components
 from recognition.component_catalog import COMPONENT_CATALOG
@@ -33,6 +34,7 @@ from service import analyze_drawing, render_dxf_base_maps
 from ingest.dwg_converter import convert_dwg_to_dxf
 from tools.vlm_capacitor_probe import _prepare_crop
 from tools.split_dxf_frames import split_dxf_frames
+from tools.split_dxf_layout_regions import split_dxf_layout_regions
 from tools.match_dxf_component_templates import match_component_templates
 
 
@@ -42,9 +44,6 @@ class P0ToP2RegressionTests(unittest.TestCase):
         visual_detector = patch("service.detect_visual_components", return_value=[])
         visual_detector.start()
         self.addCleanup(visual_detector.stop)
-        visual_text_detector = patch("service.detect_visual_texts", return_value=[])
-        visual_text_detector.start()
-        self.addCleanup(visual_text_detector.stop)
 
     def _create_dxf(self, root: Path) -> Path:
         path = root / "electrical.dxf"
@@ -160,6 +159,11 @@ class P0ToP2RegressionTests(unittest.TestCase):
         self.assertAlmostEqual(matches[0].scale, 0.1)
         self.assertAlmostEqual(matches[0].rotation_deg, 90.0)
 
+    def test_template_matching_can_be_disabled_by_environment(self):
+        with patch.dict("os.environ", {"DRAWING_TEMPLATE_MATCHING_ENABLED": "false"}):
+            self.assertFalse(template_matching_enabled())
+            self.assertEqual(load_component_templates(), [])
+
     def test_per_frame_template_match_precedes_vlm_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -188,12 +192,10 @@ class P0ToP2RegressionTests(unittest.TestCase):
             document.saveas(drawing)
 
             component_detector = Mock(return_value=([], {"enabled": True}))
-            text_detector = Mock(return_value=([], {"enabled": True}))
             progress_events: list[tuple[str, dict]] = []
             with (
                 patch.dict("os.environ", {"DRAWING_TEMPLATE_MANIFEST": str(manifest_path)}),
                 patch("service.detect_visual_components", component_detector),
-                patch("service.detect_visual_texts", text_detector),
             ):
                 result = analyze_drawing(
                     drawing,
@@ -202,7 +204,6 @@ class P0ToP2RegressionTests(unittest.TestCase):
 
         self.assertEqual(result.summary["template_component_count"], 1)
         self.assertEqual(component_detector.call_count, 1)
-        self.assertEqual(text_detector.call_count, 1)
         self.assertEqual(component_detector.call_args.kwargs["frame_contexts"][0][0], 1)
         self.assertTrue(any(phase == "template_match" for phase, _work in progress_events))
 
@@ -374,6 +375,107 @@ class P0ToP2RegressionTests(unittest.TestCase):
             self.assertTrue((root / "output" / "region_02.png").is_file())
             self.assertTrue((root / "output" / "frames.json").is_file())
 
+    def test_splits_main_frame_into_table_and_electrical_regions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            drawing = root / "layout.dxf"
+            document = ezdxf.new("R2018")
+            layout = document.modelspace()
+            layout.add_lwpolyline([(0, 0), (200, 0), (200, 100), (0, 100)], close=True)
+            # A 3 x 3 table grid on the right. The left side must remain an
+            # electrical work region after the table is removed.
+            for x in (140, 160, 180, 200):
+                layout.add_line((x, 10), (x, 70))
+            for y in (10, 30, 50, 70):
+                layout.add_line((140, y), (200, y))
+            document.saveas(drawing)
+
+            frame = detect_drawing_regions(layout)[0]
+            subregions = detect_frame_layout_regions(layout, frame)
+            manifest = split_dxf_layout_regions(drawing, root / "output", dpi=72, max_size_inches=2)
+
+        tables = [item for item in subregions if item.kind == "table"]
+        electrical = [item for item in subregions if item.kind == "electrical"]
+        self.assertEqual(len(tables), 1)
+        self.assertEqual(len(electrical), 1)
+        self.assertEqual((tables[0].region.min_x, tables[0].region.max_x), (140.0, 200.0))
+        self.assertTrue(any(item.region.min_x == 0.0 and item.region.max_x == 140.0 for item in electrical))
+        self.assertEqual(manifest["frame_count"], 1)
+        self.assertTrue(any(item["kind"] == "table" for item in manifest["frames"][0]["subregions"]))
+
+    def test_main_flow_extracts_quantities_from_confirmed_table_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            drawing = root / "schedule.dxf"
+            document = ezdxf.new("R2018")
+            layout = document.modelspace()
+            layout.add_lwpolyline([(0, 0), (200, 0), (200, 100), (0, 100)], close=True)
+            for x in (120, 140, 160, 180):
+                layout.add_line((x, 10), (x, 50))
+            for y in (10, 20, 30, 40, 50):
+                layout.add_line((120, y), (180, y))
+            layout.add_text("电流表", dxfattribs={"insert": (125, 35)})
+            layout.add_text("3", dxfattribs={"insert": (145, 35)})
+            document.saveas(drawing)
+            extraction = Mock(return_value={
+                "component_count": 1,
+                "components": [{"name": "电流表", "quantity": 3}],
+                "notes": "mock table result", "raw_response": "{}",
+            })
+            with (
+                patch("service.extract_component_quantities_from_native_texts", extraction),
+            ):
+                result = analyze_drawing(drawing)
+
+        self.assertEqual(extraction.call_count, 1)
+        self.assertIn("电流表", extraction.call_args.args[0])
+        self.assertEqual(len(result.drawing["tables"]), 1)
+        self.assertEqual(result.drawing["tables"][0]["components"][0]["quantity"], 3)
+
+    def test_main_flow_falls_back_to_vlm_table_image_without_native_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            drawing = root / "schedule-image.dxf"
+            document = ezdxf.new("R2018")
+            layout = document.modelspace()
+            layout.add_lwpolyline([(0, 0), (200, 0), (200, 100), (0, 100)], close=True)
+            for x in (120, 140, 160, 180):
+                layout.add_line((x, 10), (x, 50))
+            for y in (10, 20, 30, 40, 50):
+                layout.add_line((120, y), (180, y))
+            document.saveas(drawing)
+            extraction = Mock(return_value={
+                "component_count": 1,
+                "components": [{"name": "电流表", "quantity": 3}],
+                "notes": "mock image table result", "raw_response": "{}",
+            })
+            with patch("service.extract_component_quantities", extraction):
+                result = analyze_drawing(drawing, render_output_dir=root / "renders")
+            self.assertTrue(extraction.call_args.args[0].is_file())
+
+        self.assertEqual(extraction.call_count, 1)
+        self.assertEqual(result.drawing["tables"][0]["source"], "table_region_vlm_image")
+        self.assertEqual(result.drawing["tables"][0]["components"][0]["quantity"], 3)
+
+    def test_prefers_dense_lower_schedule_over_enclosing_schematic_rectangle(self):
+        document = ezdxf.new("R2018")
+        layout = document.modelspace()
+        layout.add_lwpolyline([(0, 0), (200, 0), (200, 120), (0, 120)], close=True)
+        # The schematic shares the schedule's left and right columns above it.
+        for x in (20, 60, 100, 140, 180):
+            layout.add_line((x, 10), (x, 110))
+        layout.add_line((20, 110), (180, 110))
+        layout.add_line((20, 50), (180, 50))
+        # The actual component quantity schedule has many repeated rows below.
+        for y in (10, 18, 26, 34, 42, 50):
+            layout.add_line((20, y), (180, y))
+
+        frame = detect_drawing_regions(layout)[0]
+        tables = [item for item in detect_frame_layout_regions(layout, frame) if item.kind == "table"]
+
+        self.assertEqual(len(tables), 1)
+        self.assertEqual((tables[0].region.min_y, tables[0].region.max_y), (10.0, 50.0))
+
     def test_detects_frame_assembled_from_polyline_segments(self):
         document = ezdxf.new("R2018")
         layout = document.modelspace()
@@ -522,14 +624,12 @@ class P0ToP2RegressionTests(unittest.TestCase):
         summary = reference_icon_summary()
         self.assertEqual(summary["classes_with_icons"], 15)
 
-    def test_vlm_prompt_uses_one_excel_reference_for_each_component_class(self):
+    def test_vlm_prompt_uses_feature_descriptions_without_reference_images(self):
         detector = VlmDetector()
-        detector.use_excel_references = True
-        detector.reference_limit = 15
-        content = detector._reference_content()
-        self.assertEqual(len(content), 30)
-        self.assertIn("circuit_breaker", str(content))
-        self.assertIn("visual references", detector._prompt(True))
+        prompt = detector._prompt()
+        self.assertIn("circuit_breaker", prompt)
+        self.assertIn("Bounding boxes must cover the symbol, not its label", prompt)
+        self.assertNotIn("visual references", prompt)
 
     def test_native_text_rules_support_canonical_component_types(self):
         component = ComponentCandidate(

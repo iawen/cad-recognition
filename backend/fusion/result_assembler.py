@@ -16,7 +16,7 @@ def assemble_vector_result(
     limitations = [
         "当前版本仅实现 DXF 矢量审计和已知 Block 识别。",
         "未识别的打散符号可由已启用的 VLM 分块识别或已配置的 OBB 基线补充；两者均需实测验证。",
-        "当前版本已执行原生 DXF 文字关联，但未执行图像 OCR、连线追踪或 Netlist 生成。",
+        "当前版本保留原生 DXF 文字解析；确认的表格区域可由模型从原生文字提取元器件数量，但未执行图像 OCR、连线追踪或 Netlist 生成。",
     ]
     if not parsed.components and parsed.entity_types.get("INSERT", 0) == 0:
         limitations.insert(

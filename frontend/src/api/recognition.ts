@@ -1,6 +1,6 @@
 import apiClient from './client';
 import { ApiResponse } from '../types/api';
-import { RecognitionTask, ElectricalSymbol, ExtractedTable, ExtractedText } from '../types/recognition';
+import { RecognitionTask, ElectricalSymbol, ExtractedTable, ExtractedText, LayoutRegion } from '../types/recognition';
 
 /** 查询任务状态 */
 export async function getTaskStatus(taskId: string): Promise<ApiResponse<RecognitionTask>> {
@@ -50,4 +50,20 @@ export async function getTables(taskId: string): Promise<ApiResponse<ExtractedTa
 /** 获取所有文字 */
 export async function getTexts(taskId: string): Promise<ApiResponse<ExtractedText[]>> {
   return apiClient.get(`/recognition/${taskId}/texts`);
+}
+
+export async function getLayoutRegions(taskId: string): Promise<ApiResponse<Omit<LayoutRegion, 'boundingBox'>[]>> {
+  return apiClient.get(`/recognition/${taskId}/layout-regions`);
+}
+
+export async function reextractLayoutRegion(
+  taskId: string,
+  payload: { frame_index: number; kind: LayoutRegion['kind']; cad_extent: [number, number, number, number] },
+): Promise<ApiResponse<{ kind: LayoutRegion['kind']; componentCount: number }>> {
+  // A VLM table image or a tiled electrical region can take several minutes.
+  // The default API timeout is appropriate for reads but would abort this
+  // request while the backend continues successfully, preventing UI refresh.
+  return apiClient.post(`/recognition/${taskId}/layout-regions/reextract`, payload, {
+    timeout: 20 * 60 * 1000,
+  });
 }
