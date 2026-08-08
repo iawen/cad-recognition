@@ -29,6 +29,23 @@ _REQUEST_INTERVAL_LOCK = threading.Lock()
 _LAST_VLM_REQUEST_STARTED_AT = 0.0
 
 
+def log_vlm_response_content(*, model: str, purpose: str, content: object) -> None:
+    """Log the provider's generated content without logging credentials or image data."""
+    if isinstance(content, str):
+        rendered_content = content
+    else:
+        try:
+            rendered_content = json.dumps(content, ensure_ascii=False)
+        except (TypeError, ValueError):
+            rendered_content = repr(content)
+    logger.info(
+        "VLM response content model=%s purpose=%s content=%s",
+        model,
+        purpose,
+        rendered_content,
+    )
+
+
 def enforce_vlm_request_interval(*, purpose: str) -> float:
     """Wait for the configured gap before starting any VLM HTTP request.
 
@@ -193,6 +210,11 @@ class VlmDetector:
             raise RuntimeError("VLM 请求超时。") from exc
 
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        log_vlm_response_content(
+            model=self.model_identifier,
+            purpose="component_detection",
+            content=content,
+        )
         detections = self._parse(content, image_path)
         self.last_request_metadata.update({
             "duration_ms": round((time.perf_counter() - started) * 1000),
@@ -255,6 +277,11 @@ class VlmDetector:
             logger.warning("VLM text request timed out model=%s tile=%s timeout_seconds=%s", self.model_identifier, image_path.name, self.timeout_seconds)
             raise RuntimeError("VLM 文字提取请求超时。") from exc
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        log_vlm_response_content(
+            model=self.model_identifier,
+            purpose="text_extraction",
+            content=content,
+        )
         texts = self._parse_texts(content, image_path)
         self.last_request_metadata.update({"duration_ms": round((time.perf_counter() - started) * 1000), "outcome": "ok", "valid_text_count": len(texts)})
         logger.info(

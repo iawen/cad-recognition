@@ -16,7 +16,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from recognition.vlm_detector import VlmDetector, enforce_vlm_request_interval
+from recognition.vlm_detector import VlmDetector, enforce_vlm_request_interval, log_vlm_response_content
 from tools.logger import logger
 
 
@@ -105,6 +105,11 @@ def _request_quantity_extraction(detector: VlmDetector, prompt: str, *, source_n
         logger.warning("VLM table quantity request timed out model=%s source=%s timeout_seconds=%s", detector.model_identifier, source_name, detector.timeout_seconds)
         raise RuntimeError("VLM 数量提取请求超时。") from exc
     raw_content = response_body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    log_vlm_response_content(
+        model=detector.model_identifier,
+        purpose="table_native_text_quantity_extraction",
+        content=raw_content,
+    )
     try:
         decoded = json.loads(raw_content)
     except (TypeError, json.JSONDecodeError):
@@ -211,6 +216,11 @@ quantity 必须是直接可读的数字；不确定时不要返回该项。"""
         raise RuntimeError("VLM 数量提取请求超时。") from exc
 
     raw_content = response_body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    log_vlm_response_content(
+        model=detector.model_identifier,
+        purpose="table_image_quantity_extraction",
+        content=raw_content,
+    )
     try:
         decoded = json.loads(raw_content)
     except (TypeError, json.JSONDecodeError):
